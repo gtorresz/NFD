@@ -78,11 +78,11 @@ RandomStrategy::afterReceiveInterest(const FaceEndpoint& ingress, const Interest
     return;
   }
 
-  ndn::random::RandomNumberEngine& rng = ndn::random::getRandomNumberEngine();
   #ifdef FUZZTESTING
-  rng =  ndn::seededRandom::getRandomNumberEngine(fuzz_seed);
+  std::shuffle(nhs.begin(), nhs.end(), ndn::seededRandom::getRandomNumberEngine(fuzz_seed));
+  #else
+  std::shuffle(nhs.begin(), nhs.end(), ndn::random::getRandomNumberEngine());
   #endif
-  std::shuffle(nhs.begin(), nhs.end(), rng);
   this->sendInterest(pitEntry, nhs.front().getFace(), interest);
 }
 

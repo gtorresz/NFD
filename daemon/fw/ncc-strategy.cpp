@@ -179,9 +179,10 @@ NccStrategy::doPropagate(FaceId inFaceId, weak_ptr<pit::Entry> pitEntryWeak)
 
   if (isForwarded) {
     std::uniform_int_distribution<time::nanoseconds::rep> dist(0, pitEntryInfo->maxInterval.count() - 1);
-    time::nanoseconds deferNext(dist(ndn::random::getRandomNumberEngine()));
     #ifdef FUZZTESTING
-    deferNext = time::nanoseconds(dist(ndn::seededRandom::getRandomNumberEngine(fuzz_seed)));
+    time::nanoseconds deferNext(dist(ndn::seededRandom::getRandomNumberEngine(fuzz_seed)));
+    #else 
+    time::nanoseconds deferNext(dist(ndn::random::getRandomNumberEngine()));
     #endif    
     pitEntryInfo->propagateTimer = getScheduler().schedule(deferNext,
       bind(&NccStrategy::doPropagate, this, inFaceId, weak_ptr<pit::Entry>(pitEntry)));

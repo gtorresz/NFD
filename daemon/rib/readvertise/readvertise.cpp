@@ -42,9 +42,10 @@ static time::milliseconds
 randomizeTimer(time::milliseconds baseTimer)
 {
   std::uniform_int_distribution<> dist(-5, 5);
-  auto newTime = baseTimer + time::milliseconds(dist(ndn::random::getRandomNumberEngine()));
   #ifdef FUZZTESTING
-  newTime = baseTimer + time::milliseconds(dist(ndn::seededRandom::getRandomNumberEngine(fuzz_seed)));
+  auto newTime = baseTimer + time::milliseconds(dist(ndn::seededRandom::getRandomNumberEngine(fuzz_seed)));
+  #else
+  auto newTime = baseTimer + time::milliseconds(dist(ndn::random::getRandomNumberEngine()));
   #endif
   return std::max(newTime, 0_ms);
 }
