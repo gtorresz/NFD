@@ -28,6 +28,7 @@
 #include "common/logger.hpp"
 
 #include <ndn-cxx/util/random.hpp>
+#include <ndn-cxx/seeded-random.hpp>
 #include <ndn-cxx/fuzzer-seed.hpp>
 namespace nfd {
 namespace rib {
@@ -43,9 +44,7 @@ randomizeTimer(time::milliseconds baseTimer)
   std::uniform_int_distribution<> dist(-5, 5);
   auto newTime = baseTimer + time::milliseconds(dist(ndn::random::getRandomNumberEngine()));
   #ifdef FUZZTESTING
-  thread_local std::mt19937 rng = [] {
-     return std::mt19937{fuzz_seed};}();
-  newTime = baseTimer + time::milliseconds(dist(rng));
+  newTime = baseTimer + time::milliseconds(dist(ndn::seededRandom::getRandomNumberEngine(fuzz_seed)));
   #endif
   return std::max(newTime, 0_ms);
 }

@@ -198,7 +198,7 @@ def build(bld):
                 target='daemon/fuzzer',
                 source='daemon/fuzzer.cpp',
                 use='daemon-objects SYSTEMD',
-                ldflags = ['-fsanitize=address', '/home/gtorresz/libFuzzer.a','-fprofile-instr-generate', ],
+                ldflags = ['-fsanitize=address', '../../libFuzzer.a','-fprofile-instr-generate', ],
                 cxxflags = ['-fsanitize=address,fuzzer-no-link','-DFUZZTESTING','-DTEST','-DCUSTOM_MUTATOR','-fprofile-instr-generate', '-fcoverage-mapping']) 
    
     bld.program(name='visualizer',
