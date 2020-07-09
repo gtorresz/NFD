@@ -7,18 +7,14 @@ Copyright (c) 2014-2020,  Regents of the University of California,
                           Washington University in St. Louis,
                           Beijing Institute of Technology,
                           The University of Memphis.
-
 This file is part of NFD (Named Data Networking Forwarding Daemon).
 See AUTHORS.md for complete list of NFD authors and contributors.
-
 NFD is free software: you can redistribute it and/or modify it under the terms
 of the GNU General Public License as published by the Free Software Foundation,
 either version 3 of the License, or (at your option) any later version.
-
 NFD is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE.  See the GNU General Public License for more details.
-
 You should have received a copy of the GNU General Public License along with
 NFD, e.g., in COPYING.md file.  If not, see <http://www.gnu.org/licenses/>.
 """
@@ -37,7 +33,7 @@ def options(opt):
     opt.load(['default-compiler-flags',
               'coverage', 'pch', 'sanitizers', 'boost',
               'dependency-checker', 'unix-socket', 'websocket',
-              'doxygen', 'sphinx_build'],
+              'doxygen', 'sphinx_build', 'fuzzing'],
              tooldir=['.waf-tools'])
 
     optgrp = opt.add_option_group('NFD Options')
@@ -64,7 +60,6 @@ PRIVILEGE_CHECK_CODE = '''
 int main()
 {
   sysconf(_SC_GETGR_R_SIZE_MAX);
-
   char buffer[100];
   group grp;
   group* grpRes;
@@ -72,11 +67,9 @@ int main()
   passwd pwd;
   passwd* pwdRes;
   getpwnam_r("nobody", &pwd, buffer, 100, &pwdRes);
-
   int ret = setegid(grp.gr_gid);
   ret = seteuid(pwd.pw_uid);
   (void)(ret);
-
   getegid();
   geteuid();
 }
@@ -136,6 +129,7 @@ def configure(conf):
     # Loading "late" to prevent tests from being compiled with profiling flags
     conf.load('coverage')
     conf.load('sanitizers')
+    conf.load('fuzzing')
 
     conf.define_cond('WITH_TESTS', conf.env.WITH_TESTS)
     conf.define_cond('WITH_OTHER_TESTS', conf.env.WITH_OTHER_TESTS)
@@ -173,7 +167,9 @@ def build(bld):
                                        'daemon/face/pcap*.cpp',
                                        'daemon/face/unix*.cpp',
                                        'daemon/face/websocket*.cpp',
-                                       'daemon/main.cpp']),
+                                       'daemon/main.cpp',
+                                       'daemon/fuzzer.cpp',
+    				       'daemon/visualizer.cpp']),
         use='core-objects',
         includes='daemon',
         export_includes='daemon')
@@ -198,6 +194,20 @@ def build(bld):
                 source='daemon/main.cpp',
                 use='daemon-objects SYSTEMD')
 
+    bld.program(name='fuzz',
+                target='daemon/fuzzer',
+                source='daemon/fuzzer.cpp',
+                use='daemon-objects SYSTEMD',
+                ldflags = ['-fsanitize=address', '/home/gtorresz/libFuzzer.a','-fprofile-instr-generate', ],
+                cxxflags = ['-fsanitize=address,fuzzer-no-link','-DFUZZTESTING','-DTEST','-DCUSTOM_MUTATOR','-fprofile-instr-generate', '-fcoverage-mapping']) 
+   
+    bld.program(name='visualizer',
+                target='daemon/visualizer',
+                source='daemon/visualizer.cpp',
+                use='daemon-objects SYSTEMD',
+                ldflags = ['-fprofile-instr-generate'],
+                cxxflags = ['-fprofile-instr-generate', '-fcoverage-mapping'])            
+ 
     bld.recurse('tools')
     bld.recurse('tests')
 

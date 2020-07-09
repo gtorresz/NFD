@@ -10,8 +10,8 @@ def configure(conf):
     if conf.options.with_coverage:
         if not conf.options.debug:
             conf.fatal('Code coverage flags require debug mode compilation (add --debug)')
-        conf.check_cxx(cxxflags=['-fprofile-arcs', '-ftest-coverage', '-fPIC'],
-                       linkflags=['-fprofile-arcs'], uselib_store='GCOV', mandatory=True)
+        conf.check_cxx(cxxflags=['-fprofile-arcs', '-ftest-coverage', '-fPIC'],    
+                linkflags=['-fprofile-arcs'], uselib_store='GCOV', mandatory=True)
 
 @TaskGen.feature('cxx','cc')
 @TaskGen.after('process_source')

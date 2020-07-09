@@ -28,6 +28,7 @@
 #include "common/global.hpp"
 
 #include <ndn-cxx/util/random.hpp>
+#include <ndn-cxx/fuzzer-seed.hpp>
 
 namespace nfd {
 namespace fw {
@@ -178,6 +179,11 @@ NccStrategy::doPropagate(FaceId inFaceId, weak_ptr<pit::Entry> pitEntryWeak)
   if (isForwarded) {
     std::uniform_int_distribution<time::nanoseconds::rep> dist(0, pitEntryInfo->maxInterval.count() - 1);
     time::nanoseconds deferNext(dist(ndn::random::getRandomNumberEngine()));
+    #ifdef FUZZTESTING
+    thread_local std::mt19937 rng = [] {
+       return std::mt19937{fuzz_seed};}();
+    deferNext = time::nanoseconds(dist(rng));
+    #endif    
     pitEntryInfo->propagateTimer = getScheduler().schedule(deferNext,
       bind(&NccStrategy::doPropagate, this, inFaceId, weak_ptr<pit::Entry>(pitEntry)));
   }

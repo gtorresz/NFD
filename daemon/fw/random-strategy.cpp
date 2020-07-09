@@ -27,6 +27,7 @@
 #include "algorithm.hpp"
 
 #include <ndn-cxx/util/random.hpp>
+#include <ndn-cxx/fuzzer-seed.hpp>
 
 namespace nfd {
 namespace fw {
@@ -77,7 +78,13 @@ RandomStrategy::afterReceiveInterest(const FaceEndpoint& ingress, const Interest
     return;
   }
 
-  std::shuffle(nhs.begin(), nhs.end(), ndn::random::getRandomNumberEngine());
+  ndn::random::RandomNumberEngine& rng = ndn::random::getRandomNumberEngine();
+  #ifdef FUZZTESTING
+  thread_local std::mt19937 frng = [] {
+     return std::mt19937{fuzz_seed};}();
+  rng = frng;
+  #endif
+  std::shuffle(nhs.begin(), nhs.end(), rng);
   this->sendInterest(pitEntry, FaceEndpoint(nhs.front().getFace(), 0), interest);
 }
 

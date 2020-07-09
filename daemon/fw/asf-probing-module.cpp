@@ -28,7 +28,7 @@
 #include "common/global.hpp"
 
 #include <ndn-cxx/util/random.hpp>
-
+#include <ndn-cxx/fuzzer-seed.hpp>
 namespace nfd {
 namespace fw {
 namespace asf {
@@ -110,6 +110,11 @@ ProbingModule::isProbingNeeded(const fib::Entry& fibEntry, const Interest& inter
     // Schedule first probe between 0 and 5 seconds
     static std::uniform_int_distribution<> randDist(0, 5000);
     auto interval = randDist(ndn::random::getRandomNumberEngine());
+    #ifdef FUZZTESTING
+    thread_local std::mt19937 rng = [] {
+       return std::mt19937{fuzz_seed};}();
+    interval = randDist(rng);
+    #endif
     scheduleProbe(fibEntry, time::milliseconds(interval));
     info.setIsFirstProbeScheduled(true);
   }
@@ -133,6 +138,11 @@ ProbingModule::chooseFace(const FaceInfoFacePairSet& rankedFaces)
 {
   static std::uniform_real_distribution<> randDist;
   double randomNumber = randDist(ndn::random::getRandomNumberEngine());
+  #ifdef FUZZTESTING
+  thread_local std::mt19937 rng = [] {
+     return std::mt19937{fuzz_seed};}();
+  randomNumber = randDist(rng);
+  #endif
   uint64_t rankSum = (rankedFaces.size() + 1) * rankedFaces.size() / 2;
 
   uint64_t rank = 1;
