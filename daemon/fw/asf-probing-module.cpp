@@ -111,6 +111,7 @@ ProbingModule::isProbingNeeded(const fib::Entry& fibEntry, const Interest& inter
     // Schedule first probe between 0 and 5 seconds
     static std::uniform_int_distribution<> randDist(0, 5000);
     #ifdef FUZZTESTING
+    //std::cout << "Here "<< fuzz_seed<<std::endl;
     auto interval = randDist(ndn::seededRandom::getRandomNumberEngine(fuzz_seed));
     #else
     auto interval = randDist(ndn::random::getRandomNumberEngine());
@@ -138,6 +139,7 @@ ProbingModule::chooseFace(const FaceInfoFacePairSet& rankedFaces)
 {
   static std::uniform_real_distribution<> randDist;
   #ifdef FUZZTESTING
+  //std::cout << "Here "<< fuzz_seed<<std::endl;
   double randomNumber = randDist(ndn::seededRandom::getRandomNumberEngine(fuzz_seed));
   #else
   double randomNumber = randDist(ndn::random::getRandomNumberEngine());

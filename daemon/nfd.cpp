@@ -196,6 +196,13 @@ Nfd::reloadConfigFile()
     config.parse(m_configSection, false, INTERNAL_CONFIG);
   }
 }
+#ifdef FUZZTESTING
+void 
+Nfd::addFibentry(Name Prefix){
+//	  fib::Entry* entry = 
+   m_forwarder->getFib().insert(Prefix);
+}
+#endif
 
 void
 Nfd::reloadConfigFileFaceSection()

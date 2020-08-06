@@ -93,6 +93,11 @@ public:
   void
   reloadConfigFile();
 
+#ifdef FUZZTESTING
+void addFibentry(Name Prefix);
+
+#endif
+
 private:
   explicit
   Nfd(ndn::KeyChain& keyChain);

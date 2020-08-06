@@ -57,7 +57,7 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-
+#include "fuzzer/trace_generated.h"
 #ifdef HAVE_LIBPCAP
 #include <pcap/pcap.h>
 #endif
@@ -67,7 +67,8 @@
 #ifdef HAVE_WEBSOCKET
 #include <websocketpp/version.hpp>
 #endif
-
+#define PREFIXES 50
+#define PACKETSIZE 4096
 namespace po = boost::program_options;
 
 NFD_LOG_INIT(Main);
@@ -105,6 +106,12 @@ public:
   initialize()
   {
     m_nfd.initialize();
+  }
+  
+  void
+  addFibentry(ndn::Name Prefix)
+  {
+  m_nfd.addFibentry(Prefix);
   }
 
   int
@@ -284,9 +291,11 @@ boost::asio::io_service m_ioService2;
 boost::asio::local::stream_protocol::socket sock2(m_ioService2);
 
 
-uint8_t interests[1000][4096];
-uint8_t dataPks[300][4096];
-uint8_t dbytes[4096];
+uint8_t interests[1000][PACKETSIZE];
+uint8_t dataPks[300][PACKETSIZE];
+uint8_t dbytes[PACKETSIZE];
+ndn::Name prefixes[PREFIXES];
+int preCount = 0;
 //size_t dataLen;
 int size = 0;
 int dataSize = 0;
@@ -294,7 +303,7 @@ size_t sizes[1000];
 size_t dataSizes[1000];
 int seed;
 int dpos =0;
-
+std::vector<std::string> faces = {"/run/nfd.sock"};
 extern "C" int 
 LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) 
 {
@@ -302,21 +311,35 @@ LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
  using namespace nfd;
  if(Size <= 2 )return 0;
  boost::asio::local::stream_protocol::socket* s;
- int socky = Data[0];
- Data++;
- Size--;
+ int socky = 0;//Data[0];
+// Data++;
+// Size--;
  if(Size <= 2 )return 0;
 
-   ndn::Block wireInt(Data, Size);
+ uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*Size);
+  std::copy(&Data[0], &Data[Size], &buf[0]);
+ auto flatData = flatbuffers::GetRoot<FuzzTrace::Input>(buf);
+ uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+ uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+ auto testf = flatData->prefix()->str();
+// std::cout<<"hello "<<testf<<std::endl;
+ auto fint = flatData->interest();
+ std::copy(fint->begin(), fint->end(), &flatint[0]);
+ auto fdata = flatData->data();
+ std::copy(fdata->begin(), fdata->end(), flatdata);
+ //   ndn::Block wireInt(Data, Size);
+   ndn::Block wireInt(flatint,fint->size());
    wireInt.parse();
-
 
   Interest inte("hu/what");
    inte.setCanBePrefix(true);
    Block wire = inte.wireEncode();
   FILE* fp = fopen (fr, "a");
-  fprintf(fp, "interest,%d,",socky);
-
+//  fprintf(fp, "interest,%d,",socky);
+inte.wireDecode(wireInt);
+inte.setName(ndn::Name(testf+inte.getName().toUri()));
+wireInt = inte.wireEncode();
+inte.wireDecode(wireInt);
 if(socky==0){
 //std::cout<<"sock\n";
  s = &sock;
@@ -331,24 +354,32 @@ else {
 }
  s->send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
  const uint8_t* writeBytes = wireInt.wire();
- for(size_t i = 0;i<wireInt.size(); i++)
-    fprintf(fp,"%02x", writeBytes[i]);
- fprintf(fp, "\n");
-  fclose(fp);
- if(Size!=wireInt.size()){
+// for(size_t i = 0;i<wireInt.size(); i++)
+//    fprintf(fp,"%02x", writeBytes[i]);
+// fprintf(fp, "\n");
+//  fclose(fp);
+// if(Size!=wireInt.size()){
+if(fdata->size()!=0){
 //std::cout<<"Doing it\n";
-    ndn::Block wire1(Data+wireInt.size(), Size-wireInt.size());
+  //  ndn::Block wire1(Data+wireInt.size(), Size-wireInt.size());
+    ndn::Block wire1(flatdata,fdata->size());
     wire1.parse();
-    fp = fopen (fr, "a");
-    fprintf(fp, "data,%d,",socky);
+//    fp = fopen (fr, "a");
+//    fprintf(fp, "data,%d,",socky);
     writeBytes = wire1.wire();
-    for(size_t i = 0;i<wire1.size(); i++)
-       fprintf(fp,"%02x", writeBytes[i]);
-    fprintf(fp, "\n");
-    fclose(fp);
+//    for(size_t i = 0;i<wire1.size(); i++)
+//       fprintf(fp,"%02x", writeBytes[i]);
+//    fprintf(fp, "\n");
+//    fclose(fp);
      s->send(boost::asio::buffer(wire1.wire(), wire1.size()));
  }
-
+for(size_t i = 0;i<Size; i++)
+       fprintf(fp,"%02x", Data[i]);
+           fprintf(fp, "\n");
+	       fclose(fp);
+free(flatdata);
+free(flatint);
+free(buf);
   return 0;//runner.run();
 }
 
@@ -357,21 +388,18 @@ SetUp(){
   time_t rawtime;
   struct tm * timeinfo;
   time ( &rawtime );
-#ifdef FUZZTESTING
- std::cout<<"Working baby\n";
-#endif
   std::clock_t start;
   start = std::clock();
   timeinfo = localtime (&rawtime);
-  std::cout<<"be\n";
-  sprintf(fr, "FuzzerTrace/packetTrace%s.csv",asctime(timeinfo) );
+  sprintf(fr, "FuzzerTrace/packetTrace.csv");//,asctime(timeinfo) );
   using namespace nfd;
   FILE* fp = fopen (fr, "w");
   fprintf(fp, "packetType,face,bytes\n");
   fclose(fp);
   std::string configFile = DEFAULT_CONFIG_FILE;
-  std::thread ribThread([configFile]{//, &wire] {
   NfdRunner runner(configFile);
+  std::thread ribThread([&runner]/*[configFile]*/{//, &wire] {
+  //NfdRunner runner(configFile);
   runner.initialize();
   return runner.run();
    });
@@ -379,7 +407,7 @@ SetUp(){
   t.tv_sec = 1;
   t.tv_usec = 500000;
   select(0, NULL, NULL, NULL, &t);
-  ep = boost::asio::local::stream_protocol::endpoint("/run/nfd.sock");
+  ep = boost::asio::local::stream_protocol::endpoint("/0.0.0.0:6363");
   //delay(1000);
   int i = 0;
   int k = 0;
@@ -391,18 +419,14 @@ SetUp(){
 	  k++; }i++;
   }
   usleep(5000000);
-  std::cout<<"before\n";
   sock.connect(ep);
-  std::cout<<"before\n";
   sock1.connect(ep);
-  std::cout<<"before\n";
   sock2.connect(ep);
-  std::cout<<"after\n";
   ndn::nfd::CommandOptions options;
   ndn::security::SigningInfo signingInfo;
   options.setSigningInfo(signingInfo);
   ControlParameters parameters = ndn::nfd::ControlParameters().setName("/a").setFlags(0);
-  shared_ptr<ControlCommand> command = make_shared<ndn::nfd::RibRegisterCommand>();
+   shared_ptr<ControlCommand> command = make_shared<ndn::nfd::RibRegisterCommand>();
   Name requestName = command->getRequestName(options.getPrefix(), parameters);
   ndn::KeyChain keyChain;
   ndn::security::CommandInterestSigner m_signer(keyChain);
@@ -423,7 +447,7 @@ SetUp(){
   sock.send(boost::asio::buffer(wire1.wire(), wire1.size()));
 
 
-  ControlParameters parameters2 = ndn::nfd::ControlParameters().setName("/c").setFlags(0);
+  /*ControlParameters parameters2 = ndn::nfd::ControlParameters().setName("/c").setFlags(0);
   shared_ptr<ControlCommand> command2 = make_shared<ndn::nfd::RibRegisterCommand>();
   Name requestName2 = command2->getRequestName(options.getPrefix(), parameters2);
   ndn::KeyChain keyChain2;
@@ -432,8 +456,56 @@ SetUp(){
   interest2.setInterestLifetime(options.getTimeout());
   ndn::Block wire2 = interest2.wireEncode();
   sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+*/
+  //create prefixes TODO
+  for(int k = 0; k < PREFIXES; k++){
+     int prefixBase = 0;
+     if(preCount > 0) prefixBase = (rand()%3);
+     ndn::Name preName;
+     int additions = 0;
+     if(prefixBase == 0){
+        additions = (rand()%25)+1;
+        preName = ndn::Name("");
+     }
+     else {
+        int base = rand()%preCount;
+        preName = ndn::Name(prefixes[base].toUri());
+        int components = 0;
+        while(additions == 0){
+           components = (rand()%25)+1;
+           additions = components - (int)preName.size();
+        }
+        if(additions < 0)
+           preName = ndn::Name(prefixes[base].getSubName(0,components).toUri());
+     }
+     ndn::Block preWire = preName.wireEncode();
+     uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE/2);
+     for(int j = 0; j < additions; j++){
+        size_t bsize = addPrefixCom(preWire, fuzz_seed, buf, preWire.value_size(), PACKETSIZE/2);
+        preWire = ndn::Block(buf,bsize);
+        preName.wireDecode(preWire);
+     }
+    // std::cout<<"Testing... "<<preName<<std::endl;
+     prefixes[k] = preName;
+     preCount++;
+     free(buf);
+     //runner.addFibentry(prefixes[k]);
+       ControlParameters parameters2 = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0);
+         shared_ptr<ControlCommand> command2 = make_shared<ndn::nfd::RibRegisterCommand>();
+	   Name requestName2 = command2->getRequestName(options.getPrefix(), parameters2);
+	     ndn::KeyChain keyChain2;
+	       ndn::security::CommandInterestSigner m_signer2(keyChain2);
+	         Interest interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());
+		   interest2.setInterestLifetime(options.getTimeout());
+		     ndn::Block wire2 = interest2.wireEncode();
+		       sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+  }
+  for(int k = 0; k < PREFIXES; k++){
+   //  std::cout<<"Verifing... "<<prefixes[k]<<std::endl;
+  }
   ribThread.join();
-return;}
+  return;
+}
 //unsigned int fuzz_seed;
 #ifdef CUSTOM_MUTATOR
 extern "C" size_t
@@ -442,20 +514,39 @@ LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize);
 extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
                                           size_t MaxSize, unsigned int Seed) {
 static int cpos = 0;
+
+auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
+//std::cout<<testFlat->mutable_face()<<std::endl;
  seed = Seed;
  fuzz_seed = Seed;
  size_t dataLen = 0;
  ndn::Interest interest;
  ndn::Data data;
- 
+ flatbuffers::FlatBufferBuilder builder(1024);
+ uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);//[fint->size()];
+ uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
  try{
-    ndn::Block wire(Data+1, Size);
+    size_t dSize = 1;
+    if(Size>1){
+    auto fint = testFlat->interest();
+     dSize = fint->size();
+     std::copy(fint->begin(), fint->end(), flatint);
+    }
+    //ndn::Block wire(Data+1, Size);
+    //wire.parse();
+    ndn::Block wire(flatint, dSize);
     wire.parse();
        try{
-          ndn::Block wire1(Data+wire.size()+1, Size-wire.size());
+          auto fdata = testFlat->data();
+	  std::copy(fdata->begin(), fdata->end(), flatdata);
+	  //ndn::Block wire1(Data+wire.size()+1, Size-wire.size());
+          //wire1.parse();
+          //data.wireDecode(wire1);
+	  //std::cout<<"Name Test: original "<<data.getName()<<std::endl;
+          ndn::Block wire1(flatdata, fdata->size());
           wire1.parse();
-
-          data.wireDecode(wire1);
+	  data.wireDecode(wire1);
+	  //std::cout<<"Name Test: flat "<<data.getName()<<std::endl;
      } 
        catch (boost::exception& e){
           ndn::KeyChain keyChain;
@@ -463,7 +554,10 @@ static int cpos = 0;
   
     }
 
+    //interest.wireDecode(wire);
+    //std::cout<<"Name Test interest: original "<<interest.getName()<<std::endl;
     interest.wireDecode(wire);
+    //std::cout<<"Name Test interest: flat "<<interest.getName()<<std::endl;
   }
    catch (boost::exception& e){
      interest.setName("a/test");
@@ -472,14 +566,21 @@ static int cpos = 0;
      interest.setApplicationParameters(bytes, 3);
      ndn::KeyChain keyChain;
      keyChain.sign(data);
+   } 
+  int protocolChange = (rand()%100);
+  if(protocolChange>50){
+    //Do random change to protocol to wither face socket or something else
   }
   ndn::Block temp(interest.wireEncode());
+
  int retransmitInterest = (rand()%300)-(300-dataSize);
  if (retransmitInterest > 285){
     int pos = (rand()%dataSize);
-    Size = constructInterest(Data+1,temp, dataPks[pos], dataSizes[pos]);
+    //Size = constructInterest(Data+1,temp, dataPks[pos], dataSizes[pos]);
+    Size = constructInterest(flatint, temp, dataPks[pos], dataSizes[pos]);
  }
 
+ //Choose to respond to previous interest, should we be doing both interest and data or just one?
   int satisfyInterest = (rand()%1000)-(1000-size);
   if(satisfyInterest > 100 && size > 0){
      int pos = (rand()%size);
@@ -492,20 +593,45 @@ static int cpos = 0;
     if(dpos == 300) dpos = 0;
     if (dataSize != 300)dataSize++;
   }
-  size_t interestLength = LLVMFuzzerCustomMutator1(temp, Data+1, Size, MaxSize/2, Seed);
-   int socky = rand()%3;
-   Data[0] = socky;
-   Data++;
+  size_t interestLength = LLVMFuzzerCustomMutator1(temp, flatint, Size, MaxSize/2, Seed);
+
+   //int socky = rand()%3;
+   //Data[0] = socky;
+   //Data++;
    for(size_t i= 0;i<interestLength;i++){
-   interests[cpos][i] = Data[i];
+//   interests[cpos][i] = Data[i];
+   interests[cpos][i] = flatint[i];
    }
   sizes[cpos] = interestLength;
   cpos++;
   if(cpos == 1000) cpos = 0;
   if (size != 1000)size++;
   for (size_t i=0; i<dataLen; i++)
-     Data[i+interestLength] = dbytes[i];
-  return interestLength+dataLen+1;
+     //Data[i+interestLength] = dbytes[i];
+     flatdata[i] = dbytes[i];
+  //std::vector<uint8_t> interestVector(&interests[cpos-1][0], &interests[cpos-1][interestLength]);
+  //std::vector<uint8_t> dataVector(&dbytes[0], &dbytes[dataLen]);
+  std::vector<uint8_t> interestVector(&flatint[0], &flatint[interestLength]);
+  std::vector<uint8_t> dataVector(&flatdata[0], &flatdata[dataLen]);
+  //for(size_t i= 0;i<interestLength;i++){
+  // printf("Original %x\n",Data[i]);
+  // printf("Copy %x\n",interestVector[i]);
+  //}
+  auto face = builder.CreateString("Test");
+  auto inputInterest = builder.CreateVector(interestVector);
+  auto inputData = builder.CreateVector(dataVector);
+  int prefixId = (rand()%PREFIXES);			 
+  auto inputPrefix = builder.CreateString(prefixes[prefixId].toUri());
+  auto genInput = FuzzTrace::CreateInput(builder, face,inputInterest, inputData, inputPrefix);
+  builder.Finish(genInput);
+  uint8_t *buf = builder.GetBufferPointer();
+  int bsize = builder.GetSize();
+//  std::cout<<"Compare the sizes boi: Interest+Data "<<interestLength+dataLen<<"  flatbuffer "<<bsize<<std::endl;
+  for (int i=0; i<bsize; i++)
+    Data[i] = buf[i];
+  free(flatint);
+  free(flatdata);
+  return bsize;
 }
 
 #endif  // CUSTOM_MUTATOR
@@ -538,12 +664,12 @@ size_t DataCustomMutator(ndn::Block temp, uint8_t *inter, uint8_t *Dat, size_t S
   totalLength += encoder.prependVarNumber(totalLength);
   totalLength += encoder.prependVarNumber(ndn::tlv::Data);
   nWire = encoder.block();
-  if (totalLength>4096){
+  if (totalLength>PACKETSIZE){
      temp =  ndn::Block(data.wireEncode());
      temp.parse();
 
   }
-  }while(totalLength>4096);
+  }while(totalLength>PACKETSIZE);
   
    for(size_t i= 0;i<totalLength;i++){
         Dat[i] = nWire.wire()[i];
