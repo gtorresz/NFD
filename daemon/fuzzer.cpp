@@ -115,7 +115,7 @@ public:
   }
 
   int
-  run()
+  run(std::mutex& NFDmtx, std::condition_variable& cvar, bool& NFD_Running)
   {
     // Return value: a non-zero value is assigned when either NFD or RIB manager (running in
     // a separate thread) fails.
@@ -165,6 +165,12 @@ public:
       std::unique_lock<std::mutex> lock(m);
       cv.wait(lock, [&ribIo] { return ribIo != nullptr; });
     }
+    
+    {
+       std::lock_guard<std::mutex> lock(NFDmtx);
+       NFD_Running = true;
+       cvar.notify_all();
+    }
 
     try {
       systemdNotify("READY=1");
@@ -178,7 +184,6 @@ public:
       NFD_LOG_FATAL(e.what());
       retval = 4;
     }
-
     {
   // ribIo is guaranteed to be alive at this point
       std::lock_guard<std::mutex> lock(m);
@@ -187,6 +192,7 @@ public:
         ribIo = nullptr;
       }
     }
+    
     ribThread.join();
 
 
@@ -212,6 +218,7 @@ private:
 
     systemdNotify("STOPPING=1");
     getGlobalIoService().stop();
+    std::cout<<"\n\n\n\n\n\n\n\nI am broken....\n\n\n\n\n\n\n\n";
   }
 
   void
@@ -289,8 +296,11 @@ boost::asio::io_service m_ioService1;
 boost::asio::local::stream_protocol::socket sock1(m_ioService1);
 boost::asio::io_service m_ioService2;
 boost::asio::local::stream_protocol::socket sock2(m_ioService2);
-
-
+boost::asio::io_service m_ioServiceTCP;
+boost::asio::ip::tcp::socket socktcp(m_ioServiceTCP);
+boost::asio::io_service m_ioServiceUDP;
+boost::asio::ip::udp::socket sockudp(m_ioServiceUDP);
+boost::asio::ip::udp::socket sockudp1(m_ioServiceUDP);
 uint8_t interests[1000][PACKETSIZE];
 uint8_t dataPks[300][PACKETSIZE];
 uint8_t dbytes[PACKETSIZE];
@@ -303,31 +313,44 @@ size_t sizes[1000];
 size_t dataSizes[1000];
 int seed;
 int dpos =0;
-std::vector<std::string> faces = {"/run/nfd.sock"};
+std::vector<std::string> faces = {"/run/nfd.sock","tcp4://0.0.0.0:6363","udp4://0.0.0.0:6363" };
+int faceNum = 3;
+int faceUses[3] = {0,0,0};
+std::vector<std::string> strats = {"best-route","access","asf","multicast","self-learning","ncc"};
+int stratNum = 6;
+int stratUses[6] = {0,0,0,0,0,0};
+std::unordered_map<std::string,std::string> prefixStrat;
+std::mutex mtx;
+std::mutex seedMtx;
+std::mutex NFDmtx;
+std::condition_variable cvar;
+bool setupComplete = false;
+bool NFD_Running = false;
+
+
 extern "C" int 
 LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) 
 {
-//static int cpos = 0;
+	
+ {
+    std::unique_lock<std::mutex> lock(mtx);
+    cvar.wait(lock,[] {return setupComplete; });  
+ }
+
  using namespace nfd;
- if(Size <= 2 )return 0;
- boost::asio::local::stream_protocol::socket* s;
- int socky = 0;//Data[0];
-// Data++;
-// Size--;
  if(Size <= 2 )return 0;
 
  uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*Size);
-  std::copy(&Data[0], &Data[Size], &buf[0]);
+ std::copy(&Data[0], &Data[Size], &buf[0]);
  auto flatData = flatbuffers::GetRoot<FuzzTrace::Input>(buf);
  uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
  uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+ int faceid = flatData->face();
  auto testf = flatData->prefix()->str();
-// std::cout<<"hello "<<testf<<std::endl;
  auto fint = flatData->interest();
  std::copy(fint->begin(), fint->end(), &flatint[0]);
  auto fdata = flatData->data();
  std::copy(fdata->begin(), fdata->end(), flatdata);
- //   ndn::Block wireInt(Data, Size);
    ndn::Block wireInt(flatint,fint->size());
    wireInt.parse();
 
@@ -335,24 +358,16 @@ LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
    inte.setCanBePrefix(true);
    Block wire = inte.wireEncode();
   FILE* fp = fopen (fr, "a");
-//  fprintf(fp, "interest,%d,",socky);
 inte.wireDecode(wireInt);
 inte.setName(ndn::Name(testf+inte.getName().toUri()));
 wireInt = inte.wireEncode();
 inte.wireDecode(wireInt);
-if(socky==0){
-//std::cout<<"sock\n";
- s = &sock;
-}
-else if(socky==1){
-//std::cout<<"sock1\n";
- s = &sock1;
-}
-else {
-//std::cout<<"sock2\n";
- s = &sock2;
-}
- s->send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+if(faceid == 0)
+  sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+  else if(faceid == 1)
+socktcp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+else 
+   sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
  const uint8_t* writeBytes = wireInt.wire();
 // for(size_t i = 0;i<wireInt.size(); i++)
 //    fprintf(fp,"%02x", writeBytes[i]);
@@ -371,7 +386,13 @@ if(fdata->size()!=0){
 //       fprintf(fp,"%02x", writeBytes[i]);
 //    fprintf(fp, "\n");
 //    fclose(fp);
-     s->send(boost::asio::buffer(wire1.wire(), wire1.size()));
+if(faceid == 0)
+     sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+  else if(faceid == 1)
+	  socktcp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+else
+	   sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+//socktcp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
  }
 for(size_t i = 0;i<Size; i++)
        fprintf(fp,"%02x", Data[i]);
@@ -380,83 +401,122 @@ for(size_t i = 0;i<Size; i++)
 free(flatdata);
 free(flatint);
 free(buf);
-  return 0;//runner.run();
+  return 0;
+}
+bool seedSet =false;
+extern "C" void
+initializeSeed(unsigned Seed){
+   std::lock_guard<std::mutex> lock(seedMtx);
+   fuzz_seed = Seed;
+   seedSet = true;
+   srand(Seed);
+   cvar.notify_all();  
 }
 
 extern "C" void
 SetUp(){
+  {
+     std::unique_lock<std::mutex> lock(seedMtx);
+     cvar.wait(lock,[] {return seedSet; });
+  }
   time_t rawtime;
   struct tm * timeinfo;
   time ( &rawtime );
   std::clock_t start;
   start = std::clock();
   timeinfo = localtime (&rawtime);
-  sprintf(fr, "FuzzerTrace/packetTrace.csv");//,asctime(timeinfo) );
+  sprintf(fr, "FuzzerTrace/packetTrace.csv");
   using namespace nfd;
   FILE* fp = fopen (fr, "w");
   fprintf(fp, "packetType,face,bytes\n");
   fclose(fp);
   std::string configFile = DEFAULT_CONFIG_FILE;
   NfdRunner runner(configFile);
-  std::thread ribThread([&runner]/*[configFile]*/{//, &wire] {
-  //NfdRunner runner(configFile);
-  runner.initialize();
-  return runner.run();
-   });
-  struct timeval t;
-  t.tv_sec = 1;
-  t.tv_usec = 500000;
-  select(0, NULL, NULL, NULL, &t);
-  ep = boost::asio::local::stream_protocol::endpoint("/0.0.0.0:6363");
-  //delay(1000);
-  int i = 0;
-  int k = 0;
-  while(i <100000){
-	   while(k <100000){
-    double sy = 1200;
-   double sx = 1200;
-    sx = sy*sx;
-	  k++; }i++;
+  std::thread ribThread([&runner]{
+     runner.initialize();
+     return runner.run(NFDmtx, cvar, NFD_Running);
+  });
+//  NFDmtx;
+//  NFD_Running
+  {  std::unique_lock<std::mutex> lock(NFDmtx);
+ //    bool set = false;
+     cvar.wait(lock,[] {return NFD_Running;});
   }
-  usleep(5000000);
+  ep = boost::asio::local::stream_protocol::endpoint(faces[0]);
   sock.connect(ep);
-  sock1.connect(ep);
-  sock2.connect(ep);
+  Interest inte("setup");
+    inte.setCanBePrefix(true);
+      Block wireInt = inte.wireEncode();
+ //     sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+/*  boost::asio::ip::tcp::resolver resolver(m_ioServiceTCP);
+  boost::asio::ip::tcp::resolver::query query("localhost", "6363");
+  boost::asio::ip::tcp::resolver::iterator iter = resolver.resolve(query);
+  boost::asio::ip::tcp::resolver::iterator end; // End mariker.
+  while (iter != end)
+  {
+	  boost::asio::ip::tcp::endpoint endpoint = *iter++;
+	      std::cout << endpoint << std::endl;
+  }*/
+  boost::asio::ip::tcp::endpoint endpoint( boost::asio::ip::address::from_string("0.0.0.0"), 6363);
+  /*boost::asio::connect(socktcp, resolver.resolve(query));
+  boost::asio::socket_base::send_buffer_size option(8192);
+  socktcp.set_option(option);*/
+  socktcp.connect(endpoint);
+
   ndn::nfd::CommandOptions options;
   ndn::security::SigningInfo signingInfo;
   options.setSigningInfo(signingInfo);
-  ControlParameters parameters = ndn::nfd::ControlParameters().setName("/a").setFlags(0);
-   shared_ptr<ControlCommand> command = make_shared<ndn::nfd::RibRegisterCommand>();
-  Name requestName = command->getRequestName(options.getPrefix(), parameters);
+  ControlParameters parameters;// = ndn::nfd::ControlParameters().setName("/a").setFlags(0);
+   shared_ptr<ControlCommand> command;// = make_shared<ndn::nfd::RibRegisterCommand>();
+  Name requestName;// = command->getRequestName(options.getPrefix(), parameters);
   ndn::KeyChain keyChain;
   ndn::security::CommandInterestSigner m_signer(keyChain);
-  Interest interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+  Interest interest;// = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+  //interest.setInterestLifetime(options.getTimeout());
+  ndn::Block wire;// = interest.wireEncode();
+  //sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+  /*
+  parameters = ndn::nfd::ControlParameters().setUri("udp4://0.0.0.0:6363");
+ command = make_shared<ndn::nfd::FaceCreateCommand>();
+ requestName = command->getRequestName(options.getPrefix(), parameters);
+ interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+ interest.setInterestLifetime(options.getTimeout());
+ wire = interest.wireEncode();
+ //sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+
+
+
+ parameters = ndn::nfd::ControlParameters().setUri("udp4://224.0.23.170:56363");
+ command = make_shared<ndn::nfd::FaceCreateCommand>();
+ requestName = command->getRequestName(options.getPrefix(), parameters);
+ interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+ interest.setInterestLifetime(options.getTimeout());
+ wire = interest.wireEncode();
+ sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+
+
+ parameters = ndn::nfd::ControlParameters().setUri("ws://0.0.0.0:9696");
+ command = make_shared<ndn::nfd::FaceCreateCommand>();
+ requestName = command->getRequestName(options.getPrefix(), parameters);
+ interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+ interest.setInterestLifetime(options.getTimeout());
+ wire = interest.wireEncode();
+ sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+
+  parameters = ndn::nfd::ControlParameters().setUri("ether://01:00:5e:00:17:aa");
+  command = make_shared<ndn::nfd::FaceCreateCommand>();
+  requestName = command->getRequestName(options.getPrefix(), parameters);
+  interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
   interest.setInterestLifetime(options.getTimeout());
-  ndn::Block wire = interest.wireEncode();
+  wire = interest.wireEncode();
   sock.send(boost::asio::buffer(wire.wire(), wire.size()));
-
-
-  ControlParameters parameters1 = ndn::nfd::ControlParameters().setName("/b").setFlags(0);
-  shared_ptr<ControlCommand> command1 = make_shared<ndn::nfd::RibRegisterCommand>();
-  Name requestName1 = command1->getRequestName(options.getPrefix(), parameters1);
-  ndn::KeyChain keyChain1;
-  ndn::security::CommandInterestSigner m_signer1(keyChain1);
-  Interest interest1 = m_signer1.makeCommandInterest(requestName1, options.getSigningInfo());
-  interest1.setInterestLifetime(options.getTimeout());
-  ndn::Block wire1 = interest1.wireEncode();
-  sock.send(boost::asio::buffer(wire1.wire(), wire1.size()));
-
-
-  /*ControlParameters parameters2 = ndn::nfd::ControlParameters().setName("/c").setFlags(0);
-  shared_ptr<ControlCommand> command2 = make_shared<ndn::nfd::RibRegisterCommand>();
-  Name requestName2 = command2->getRequestName(options.getPrefix(), parameters2);
-  ndn::KeyChain keyChain2;
-  ndn::security::CommandInterestSigner m_signer2(keyChain2);
-  Interest interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());
-  interest2.setInterestLifetime(options.getTimeout());
-  ndn::Block wire2 = interest2.wireEncode();
-  sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
-*/
+	// boost::asio::ip::udp::endpoint endpoint1( boost::asio::ip::udp::v4(), 6363);
+//	boost::asio::ip::udp::endpoint endpoint1("udp4://0.0.0.0:6363");
+//*/
+ boost::asio::ip::udp::endpoint endpoint1(
+                         boost::asio::ip::address::from_string("0.0.0.0"), 6363);
+sockudp.connect(endpoint1);
+sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
   //create prefixes TODO
   for(int k = 0; k < PREFIXES; k++){
      int prefixBase = 0;
@@ -489,19 +549,43 @@ SetUp(){
      prefixes[k] = preName;
      preCount++;
      free(buf);
+
+
+     int faceChoice = rand()%faceNum;
+     while (float(stratUses[faceChoice])>=float(PREFIXES)/float(faceNum))
+        faceChoice = rand()%faceNum;
+
      //runner.addFibentry(prefixes[k]);
-       ControlParameters parameters2 = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0);
-         shared_ptr<ControlCommand> command2 = make_shared<ndn::nfd::RibRegisterCommand>();
-	   Name requestName2 = command2->getRequestName(options.getPrefix(), parameters2);
-	     ndn::KeyChain keyChain2;
-	       ndn::security::CommandInterestSigner m_signer2(keyChain2);
-	         Interest interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());
-		   interest2.setInterestLifetime(options.getTimeout());
-		     ndn::Block wire2 = interest2.wireEncode();
-		       sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+     ControlParameters parameters2 = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0).setFaceId(256+faceChoice);
+     shared_ptr<ControlCommand> command2 = make_shared<ndn::nfd::RibRegisterCommand>();
+     Name requestName2 = command2->getRequestName(options.getPrefix(), parameters2);
+     ndn::KeyChain keyChain2;
+     ndn::security::CommandInterestSigner m_signer2(keyChain2);
+     Interest interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());
+     interest2.setInterestLifetime(options.getTimeout());
+     ndn::Block wire2 = interest2.wireEncode();
+     sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+
+     int stratChoice = rand()%stratNum;
+     while (float(stratUses[stratChoice])>=float(PREFIXES)/float(stratNum))
+            stratChoice = rand()%stratNum;
+     stratUses[stratChoice]++;
+     parameters2 = ndn::nfd::ControlParameters().setName(prefixes[k]).setStrategy("ndn:/localhost/nfd/strategy/"+strats[stratChoice]);
+     shared_ptr<ControlCommand> commandStrat = make_shared<ndn::nfd::StrategyChoiceSetCommand>();	     
+     requestName2 = commandStrat->getRequestName(options.getPrefix(), parameters2);
+     interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());     
+     interest2.setInterestLifetime(options.getTimeout());
+     wire2 = interest2.wireEncode();
+     sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+     prefixStrat.insert(std::make_pair(preName.toUri(),strats[stratChoice]));
   }
   for(int k = 0; k < PREFIXES; k++){
-   //  std::cout<<"Verifing... "<<prefixes[k]<<std::endl;
+     //std::cout<<k<<" Verifing... "<<prefixStrat[prefixes[k].toUri()]<<std::endl;
+  }
+  {
+     std::lock_guard<std::mutex> lock(mtx);
+     setupComplete = true;
+     cvar.notify_all();
   }
   ribThread.join();
   return;
@@ -517,8 +601,7 @@ static int cpos = 0;
 
 auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
 //std::cout<<testFlat->mutable_face()<<std::endl;
- seed = Seed;
- fuzz_seed = Seed;
+  seed = Seed;
  size_t dataLen = 0;
  ndn::Interest interest;
  ndn::Data data;
@@ -617,12 +700,13 @@ auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
   // printf("Original %x\n",Data[i]);
   // printf("Copy %x\n",interestVector[i]);
   //}
-  auto face = builder.CreateString("Test");
+  int face = rand()%faceNum;
   auto inputInterest = builder.CreateVector(interestVector);
   auto inputData = builder.CreateVector(dataVector);
   int prefixId = (rand()%PREFIXES);			 
   auto inputPrefix = builder.CreateString(prefixes[prefixId].toUri());
-  auto genInput = FuzzTrace::CreateInput(builder, face,inputInterest, inputData, inputPrefix);
+  auto inputStrategy = builder.CreateString(prefixStrat[prefixes[prefixId].toUri()]);
+  auto genInput = FuzzTrace::CreateInput(builder, face,inputInterest, inputData, inputPrefix, inputStrategy);
   builder.Finish(genInput);
   uint8_t *buf = builder.GetBufferPointer();
   int bsize = builder.GetSize();

@@ -3,9 +3,10 @@
 namespace FuzzTrace;
 
 table Input {
-  face:string;
+  face:int;
   interest:[ubyte];
   data:[ubyte];
   prefix:string;
+  strategy:string;
 }
 

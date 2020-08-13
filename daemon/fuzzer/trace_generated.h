@@ -17,10 +17,11 @@ struct Input FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
     VT_FACE = 4,
     VT_INTEREST = 6,
     VT_DATA = 8,
-    VT_PREFIX = 10
+    VT_PREFIX = 10,
+    VT_STRATEGY = 12
   };
-  const flatbuffers::String *face() const {
-    return GetPointer<const flatbuffers::String *>(VT_FACE);
+  int32_t face() const {
+    return GetField<int32_t>(VT_FACE, 0);
   }
   const flatbuffers::Vector<uint8_t> *interest() const {
     return GetPointer<const flatbuffers::Vector<uint8_t> *>(VT_INTEREST);
@@ -31,16 +32,20 @@ struct Input FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   const flatbuffers::String *prefix() const {
     return GetPointer<const flatbuffers::String *>(VT_PREFIX);
   }
+  const flatbuffers::String *strategy() const {
+    return GetPointer<const flatbuffers::String *>(VT_STRATEGY);
+  }
   bool Verify(flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
-           VerifyOffset(verifier, VT_FACE) &&
-           verifier.VerifyString(face()) &&
+           VerifyField<int32_t>(verifier, VT_FACE) &&
            VerifyOffset(verifier, VT_INTEREST) &&
            verifier.VerifyVector(interest()) &&
            VerifyOffset(verifier, VT_DATA) &&
            verifier.VerifyVector(data()) &&
            VerifyOffset(verifier, VT_PREFIX) &&
            verifier.VerifyString(prefix()) &&
+           VerifyOffset(verifier, VT_STRATEGY) &&
+           verifier.VerifyString(strategy()) &&
            verifier.EndTable();
   }
 };
@@ -49,8 +54,8 @@ struct InputBuilder {
   typedef Input Table;
   flatbuffers::FlatBufferBuilder &fbb_;
   flatbuffers::uoffset_t start_;
-  void add_face(flatbuffers::Offset<flatbuffers::String> face) {
-    fbb_.AddOffset(Input::VT_FACE, face);
+  void add_face(int32_t face) {
+    fbb_.AddElement<int32_t>(Input::VT_FACE, face, 0);
   }
   void add_interest(flatbuffers::Offset<flatbuffers::Vector<uint8_t>> interest) {
     fbb_.AddOffset(Input::VT_INTEREST, interest);
@@ -60,6 +65,9 @@ struct InputBuilder {
   }
   void add_prefix(flatbuffers::Offset<flatbuffers::String> prefix) {
     fbb_.AddOffset(Input::VT_PREFIX, prefix);
+  }
+  void add_strategy(flatbuffers::Offset<flatbuffers::String> strategy) {
+    fbb_.AddOffset(Input::VT_STRATEGY, strategy);
   }
   explicit InputBuilder(flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
@@ -74,11 +82,13 @@ struct InputBuilder {
 
 inline flatbuffers::Offset<Input> CreateInput(
     flatbuffers::FlatBufferBuilder &_fbb,
-    flatbuffers::Offset<flatbuffers::String> face = 0,
+    int32_t face = 0,
     flatbuffers::Offset<flatbuffers::Vector<uint8_t>> interest = 0,
     flatbuffers::Offset<flatbuffers::Vector<uint8_t>> data = 0,
-    flatbuffers::Offset<flatbuffers::String> prefix = 0) {
+    flatbuffers::Offset<flatbuffers::String> prefix = 0,
+    flatbuffers::Offset<flatbuffers::String> strategy = 0) {
   InputBuilder builder_(_fbb);
+  builder_.add_strategy(strategy);
   builder_.add_prefix(prefix);
   builder_.add_data(data);
   builder_.add_interest(interest);
@@ -88,20 +98,22 @@ inline flatbuffers::Offset<Input> CreateInput(
 
 inline flatbuffers::Offset<Input> CreateInputDirect(
     flatbuffers::FlatBufferBuilder &_fbb,
-    const char *face = nullptr,
+    int32_t face = 0,
     const std::vector<uint8_t> *interest = nullptr,
     const std::vector<uint8_t> *data = nullptr,
-    const char *prefix = nullptr) {
-  auto face__ = face ? _fbb.CreateString(face) : 0;
+    const char *prefix = nullptr,
+    const char *strategy = nullptr) {
   auto interest__ = interest ? _fbb.CreateVector<uint8_t>(*interest) : 0;
   auto data__ = data ? _fbb.CreateVector<uint8_t>(*data) : 0;
   auto prefix__ = prefix ? _fbb.CreateString(prefix) : 0;
+  auto strategy__ = strategy ? _fbb.CreateString(strategy) : 0;
   return FuzzTrace::CreateInput(
       _fbb,
-      face__,
+      face,
       interest__,
       data__,
-      prefix__);
+      prefix__,
+      strategy__);
 }
 
 }  // namespace FuzzTrace
