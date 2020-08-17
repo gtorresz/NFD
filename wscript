@@ -169,10 +169,26 @@ def build(bld):
                                        'daemon/face/websocket*.cpp',
                                        'daemon/main.cpp',
                                        'daemon/fuzzer.cpp',
-    				       'daemon/visualizer.cpp']),
+    				       'daemon/visualizer.cpp',
+                                       'daemon/fuzzUtil/*']),
         use='core-objects',
         includes='daemon',
         export_includes='daemon')
+
+    fuzz_objects = bld.objects(
+        target='fuzz-objects',
+        source=bld.path.ant_glob( 'daemon/fuzzUtil/*.cpp'), #'daemon/**/*.cpp',
+        #                         excl=['daemon/face/*ethernet*.cpp',
+        #                               'daemon/face/pcap*.cpp',
+        #                               'daemon/face/unix*.cpp',
+        #                               'daemon/face/websocket*.cpp',
+        #                               'daemon/main.cpp',
+        #                               'daemon/fuzzer.cpp',
+        #                               'daemon/visualizer.cpp']),
+        use='daemon-objects',
+        includes='daemon',
+        export_includes='daemon')
+
 
     if bld.env.HAVE_LIBPCAP:
         nfd_objects.source += bld.path.ant_glob('daemon/face/*ethernet*.cpp')
@@ -197,7 +213,7 @@ def build(bld):
     bld.program(name='fuzz',
                 target='daemon/fuzzer',
                 source='daemon/fuzzer.cpp',
-                use='daemon-objects SYSTEMD',
+                use='fuzz-objects SYSTEMD',
                 ldflags = ['-fsanitize=address', '../../libFuzzer.a','-fprofile-instr-generate', ],
                 cxxflags = ['-fsanitize=address,fuzzer-no-link','-DFUZZTESTING','-DTEST','-DCUSTOM_MUTATOR','-fprofile-instr-generate', '-fcoverage-mapping']) 
    

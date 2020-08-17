@@ -50,14 +50,14 @@
 #include <ndn-cxx/version.hpp>
 #include <ndn-cxx/transport/unix-transport.hpp>
 #include "face/unix-stream-transport.hpp"
-#include <ndn-cxx/mutator.hpp>
+#include "fuzzUtil/mutator.hpp"
 #include <ndn-cxx/fuzzer-seed.hpp>
 #include "face/pcap-helper.hpp"
 #include <unistd.h>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-#include "fuzzer/trace_generated.h"
+#include "fuzzUtil/trace_generated.h"
 #ifdef HAVE_LIBPCAP
 #include <pcap/pcap.h>
 #endif
@@ -252,21 +252,19 @@ size_t DataCustomMutator(ndn::Block temp, uint8_t *inter, uint8_t *Dat, size_t S
 int *k;
 char fr[100000];
 char ***c;
+ndn::Mutator mutator;
 extern "C" int LLVMFuzzerInitialize(int *argc, char ***argv) {
    k = argc;
    c = argv;
    return 0;
 }
+// ndn::Mutator mutator;
 
 size_t constructInterest(uint8_t *sendBytes, ndn::Block inter, uint8_t* Dat, size_t Size){
    ndn::Interest interest;
    size_t totalLength = 0;
    ndn::EncodingEstimator estimator;
    interest.wireDecode(inter);
-//   interest.setName("temp");
-//   interest.setCanBePrefix(false);
-//   const uint8_t bytes[3]={128, 1,255};
-//   interest.setApplicationParameters(bytes, 3);
    size_t estimatedSize = interest.wireEncode(estimator);
    ndn::EncodingBuffer encoder(estimatedSize, 0);
    ndn::Block wire(Dat, Size);
@@ -305,10 +303,6 @@ uint8_t interests[1000][PACKETSIZE];
 uint8_t dataPks[300][PACKETSIZE];
 uint8_t dbytes[PACKETSIZE];
 ndn::Name prefixes[PREFIXES];
-int preCount = 0;
-//size_t dataLen;
-int size = 0;
-int dataSize = 0;
 size_t sizes[1000];
 size_t dataSizes[1000];
 int seed;
@@ -332,75 +326,60 @@ extern "C" int
 LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) 
 {
 	
- {
-    std::unique_lock<std::mutex> lock(mtx);
-    cvar.wait(lock,[] {return setupComplete; });  
- }
+  {
+     std::unique_lock<std::mutex> lock(mtx);
+     cvar.wait(lock,[] {return setupComplete; });  
+  }
 
- using namespace nfd;
- if(Size <= 2 )return 0;
+  using namespace nfd;
+  if(Size <= 2 )return 0;
 
- uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*Size);
- std::copy(&Data[0], &Data[Size], &buf[0]);
- auto flatData = flatbuffers::GetRoot<FuzzTrace::Input>(buf);
- uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
- uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
- int faceid = flatData->face();
- auto testf = flatData->prefix()->str();
- auto fint = flatData->interest();
- std::copy(fint->begin(), fint->end(), &flatint[0]);
- auto fdata = flatData->data();
- std::copy(fdata->begin(), fdata->end(), flatdata);
-   ndn::Block wireInt(flatint,fint->size());
-   wireInt.parse();
+  uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*Size);
+  std::copy(&Data[0], &Data[Size], &buf[0]);
+  auto flatData = flatbuffers::GetRoot<FuzzTrace::Input>(buf);
+  uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+  uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+  int faceid = flatData->face();
+  auto testf = flatData->prefix()->str();
+  auto fint = flatData->interest();
+  std::copy(fint->begin(), fint->end(), &flatint[0]);
+  auto fdata = flatData->data();
+  std::copy(fdata->begin(), fdata->end(), flatdata);
+  ndn::Block wireInt(flatint,fint->size());
+  wireInt.parse();
 
   Interest inte("hu/what");
-   inte.setCanBePrefix(true);
-   Block wire = inte.wireEncode();
+  inte.setCanBePrefix(true);
+  Block wire = inte.wireEncode();
   FILE* fp = fopen (fr, "a");
-inte.wireDecode(wireInt);
-inte.setName(ndn::Name(testf+inte.getName().toUri()));
-wireInt = inte.wireEncode();
-inte.wireDecode(wireInt);
-if(faceid == 0)
-  sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-  else if(faceid == 1)
-socktcp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-else 
-   sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
- const uint8_t* writeBytes = wireInt.wire();
-// for(size_t i = 0;i<wireInt.size(); i++)
-//    fprintf(fp,"%02x", writeBytes[i]);
-// fprintf(fp, "\n");
-//  fclose(fp);
-// if(Size!=wireInt.size()){
-if(fdata->size()!=0){
-//std::cout<<"Doing it\n";
-  //  ndn::Block wire1(Data+wireInt.size(), Size-wireInt.size());
-    ndn::Block wire1(flatdata,fdata->size());
-    wire1.parse();
-//    fp = fopen (fr, "a");
-//    fprintf(fp, "data,%d,",socky);
-    writeBytes = wire1.wire();
-//    for(size_t i = 0;i<wire1.size(); i++)
-//       fprintf(fp,"%02x", writeBytes[i]);
-//    fprintf(fp, "\n");
-//    fclose(fp);
-if(faceid == 0)
+  inte.wireDecode(wireInt);
+  inte.setName(ndn::Name(testf+inte.getName().toUri()));
+  wireInt = inte.wireEncode();
+  inte.wireDecode(wireInt);
+  if(faceid == 0)
      sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
   else if(faceid == 1)
-	  socktcp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-else
-	   sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-//socktcp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
- }
-for(size_t i = 0;i<Size; i++)
-       fprintf(fp,"%02x", Data[i]);
-           fprintf(fp, "\n");
-	       fclose(fp);
-free(flatdata);
-free(flatint);
-free(buf);
+     socktcp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+  else 
+     sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+  //const uint8_t* writeBytes = wireInt.wire();
+  if(fdata->size()!=0){
+     ndn::Block wire1(flatdata,fdata->size());
+     wire1.parse();
+     if(faceid == 0)
+        sock.send(boost::asio::buffer(wire1.wire(), wire1.size()));
+     else if(faceid == 1)
+        socktcp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
+     else
+        sockudp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
+  }
+  for(size_t i = 0;i<Size; i++)
+     fprintf(fp,"%02x", Data[i]);
+  fprintf(fp, "\n");
+  fclose(fp);
+  free(flatdata);
+  free(flatint);
+  free(buf);
   return 0;
 }
 bool seedSet =false;
@@ -436,10 +415,7 @@ SetUp(){
      runner.initialize();
      return runner.run(NFDmtx, cvar, NFD_Running);
   });
-//  NFDmtx;
-//  NFD_Running
   {  std::unique_lock<std::mutex> lock(NFDmtx);
- //    bool set = false;
      cvar.wait(lock,[] {return NFD_Running;});
   }
   ep = boost::asio::local::stream_protocol::endpoint(faces[0]);
@@ -447,77 +423,24 @@ SetUp(){
   Interest inte("setup");
     inte.setCanBePrefix(true);
       Block wireInt = inte.wireEncode();
- //     sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-/*  boost::asio::ip::tcp::resolver resolver(m_ioServiceTCP);
-  boost::asio::ip::tcp::resolver::query query("localhost", "6363");
-  boost::asio::ip::tcp::resolver::iterator iter = resolver.resolve(query);
-  boost::asio::ip::tcp::resolver::iterator end; // End mariker.
-  while (iter != end)
-  {
-	  boost::asio::ip::tcp::endpoint endpoint = *iter++;
-	      std::cout << endpoint << std::endl;
-  }*/
   boost::asio::ip::tcp::endpoint endpoint( boost::asio::ip::address::from_string("0.0.0.0"), 6363);
-  /*boost::asio::connect(socktcp, resolver.resolve(query));
-  boost::asio::socket_base::send_buffer_size option(8192);
-  socktcp.set_option(option);*/
   socktcp.connect(endpoint);
 
   ndn::nfd::CommandOptions options;
   ndn::security::SigningInfo signingInfo;
   options.setSigningInfo(signingInfo);
-  ControlParameters parameters;// = ndn::nfd::ControlParameters().setName("/a").setFlags(0);
-   shared_ptr<ControlCommand> command;// = make_shared<ndn::nfd::RibRegisterCommand>();
-  Name requestName;// = command->getRequestName(options.getPrefix(), parameters);
+  ControlParameters parameters;
+   shared_ptr<ControlCommand> command;
+  Name requestName;
   ndn::KeyChain keyChain;
   ndn::security::CommandInterestSigner m_signer(keyChain);
-  Interest interest;// = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
-  //interest.setInterestLifetime(options.getTimeout());
-  ndn::Block wire;// = interest.wireEncode();
-  //sock.send(boost::asio::buffer(wire.wire(), wire.size()));
-  /*
-  parameters = ndn::nfd::ControlParameters().setUri("udp4://0.0.0.0:6363");
- command = make_shared<ndn::nfd::FaceCreateCommand>();
- requestName = command->getRequestName(options.getPrefix(), parameters);
- interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
- interest.setInterestLifetime(options.getTimeout());
- wire = interest.wireEncode();
- //sock.send(boost::asio::buffer(wire.wire(), wire.size()));
-
-
-
- parameters = ndn::nfd::ControlParameters().setUri("udp4://224.0.23.170:56363");
- command = make_shared<ndn::nfd::FaceCreateCommand>();
- requestName = command->getRequestName(options.getPrefix(), parameters);
- interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
- interest.setInterestLifetime(options.getTimeout());
- wire = interest.wireEncode();
- sock.send(boost::asio::buffer(wire.wire(), wire.size()));
-
-
- parameters = ndn::nfd::ControlParameters().setUri("ws://0.0.0.0:9696");
- command = make_shared<ndn::nfd::FaceCreateCommand>();
- requestName = command->getRequestName(options.getPrefix(), parameters);
- interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
- interest.setInterestLifetime(options.getTimeout());
- wire = interest.wireEncode();
- sock.send(boost::asio::buffer(wire.wire(), wire.size()));
-
-  parameters = ndn::nfd::ControlParameters().setUri("ether://01:00:5e:00:17:aa");
-  command = make_shared<ndn::nfd::FaceCreateCommand>();
-  requestName = command->getRequestName(options.getPrefix(), parameters);
-  interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
-  interest.setInterestLifetime(options.getTimeout());
-  wire = interest.wireEncode();
-  sock.send(boost::asio::buffer(wire.wire(), wire.size()));
-	// boost::asio::ip::udp::endpoint endpoint1( boost::asio::ip::udp::v4(), 6363);
-//	boost::asio::ip::udp::endpoint endpoint1("udp4://0.0.0.0:6363");
-//*/
+  Interest interest;
+  ndn::Block wire;
  boost::asio::ip::udp::endpoint endpoint1(
                          boost::asio::ip::address::from_string("0.0.0.0"), 6363);
 sockudp.connect(endpoint1);
 sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-  //create prefixes TODO
+int preCount = 0;
   for(int k = 0; k < PREFIXES; k++){
      int prefixBase = 0;
      if(preCount > 0) prefixBase = (rand()%3);
@@ -541,11 +464,10 @@ sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
      ndn::Block preWire = preName.wireEncode();
      uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE/2);
      for(int j = 0; j < additions; j++){
-        size_t bsize = addPrefixCom(preWire, fuzz_seed, buf, preWire.value_size(), PACKETSIZE/2);
+        size_t bsize = mutator.addPrefixCom(preWire, fuzz_seed, buf, preWire.value_size(), PACKETSIZE/2);
         preWire = ndn::Block(buf,bsize);
         preName.wireDecode(preWire);
      }
-    // std::cout<<"Testing... "<<preName<<std::endl;
      prefixes[k] = preName;
      preCount++;
      free(buf);
@@ -555,33 +477,28 @@ sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
      while (float(stratUses[faceChoice])>=float(PREFIXES)/float(faceNum))
         faceChoice = rand()%faceNum;
 
-     //runner.addFibentry(prefixes[k]);
-     ControlParameters parameters2 = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0).setFaceId(256+faceChoice);
-     shared_ptr<ControlCommand> command2 = make_shared<ndn::nfd::RibRegisterCommand>();
-     Name requestName2 = command2->getRequestName(options.getPrefix(), parameters2);
-     ndn::KeyChain keyChain2;
-     ndn::security::CommandInterestSigner m_signer2(keyChain2);
-     Interest interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());
-     interest2.setInterestLifetime(options.getTimeout());
-     ndn::Block wire2 = interest2.wireEncode();
-     sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+     parameters = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0).setFaceId(256+faceChoice);
+     command = make_shared<ndn::nfd::RibRegisterCommand>();
+     requestName = command->getRequestName(options.getPrefix(), parameters);
+     interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+     interest.setInterestLifetime(options.getTimeout());
+     wire = interest.wireEncode();
+     sock.send(boost::asio::buffer(wire.wire(), wire.size()));
 
      int stratChoice = rand()%stratNum;
      while (float(stratUses[stratChoice])>=float(PREFIXES)/float(stratNum))
             stratChoice = rand()%stratNum;
      stratUses[stratChoice]++;
-     parameters2 = ndn::nfd::ControlParameters().setName(prefixes[k]).setStrategy("ndn:/localhost/nfd/strategy/"+strats[stratChoice]);
-     shared_ptr<ControlCommand> commandStrat = make_shared<ndn::nfd::StrategyChoiceSetCommand>();	     
-     requestName2 = commandStrat->getRequestName(options.getPrefix(), parameters2);
-     interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());     
-     interest2.setInterestLifetime(options.getTimeout());
-     wire2 = interest2.wireEncode();
-     sock.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+     parameters = ndn::nfd::ControlParameters().setName(prefixes[k]).setStrategy("ndn:/localhost/nfd/strategy/"+strats[stratChoice]);
+     command = make_shared<ndn::nfd::StrategyChoiceSetCommand>();	     
+     requestName = command->getRequestName(options.getPrefix(), parameters);
+     interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());     
+     interest.setInterestLifetime(options.getTimeout());
+     wire = interest.wireEncode();
+     sock.send(boost::asio::buffer(wire.wire(), wire.size()));
      prefixStrat.insert(std::make_pair(preName.toUri(),strats[stratChoice]));
   }
-  for(int k = 0; k < PREFIXES; k++){
-     //std::cout<<k<<" Verifing... "<<prefixStrat[prefixes[k].toUri()]<<std::endl;
-  }
+  
   {
      std::lock_guard<std::mutex> lock(mtx);
      setupComplete = true;
@@ -590,6 +507,7 @@ sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
   ribThread.join();
   return;
 }
+
 //unsigned int fuzz_seed;
 #ifdef CUSTOM_MUTATOR
 extern "C" size_t
@@ -597,109 +515,91 @@ LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize);
 
 extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
                                           size_t MaxSize, unsigned int Seed) {
-static int cpos = 0;
-
-auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
-//std::cout<<testFlat->mutable_face()<<std::endl;
+  static int cpos = 0;
+  auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
   seed = Seed;
- size_t dataLen = 0;
- ndn::Interest interest;
- ndn::Data data;
- flatbuffers::FlatBufferBuilder builder(1024);
- uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);//[fint->size()];
- uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
- try{
-    size_t dSize = 1;
-    if(Size>1){
-    auto fint = testFlat->interest();
-     dSize = fint->size();
-     std::copy(fint->begin(), fint->end(), flatint);
-    }
-    //ndn::Block wire(Data+1, Size);
-    //wire.parse();
-    ndn::Block wire(flatint, dSize);
-    wire.parse();
-       try{
-          auto fdata = testFlat->data();
-	  std::copy(fdata->begin(), fdata->end(), flatdata);
-	  //ndn::Block wire1(Data+wire.size()+1, Size-wire.size());
-          //wire1.parse();
-          //data.wireDecode(wire1);
-	  //std::cout<<"Name Test: original "<<data.getName()<<std::endl;
-          ndn::Block wire1(flatdata, fdata->size());
-          wire1.parse();
-	  data.wireDecode(wire1);
-	  //std::cout<<"Name Test: flat "<<data.getName()<<std::endl;
+  size_t dataLen = 0;
+  ndn::Interest interest;
+  ndn::Data data;
+  flatbuffers::FlatBufferBuilder builder(1024);
+  uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+  uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+  try{
+     size_t dSize = 1;
+     if(Size>1){
+        auto fint = testFlat->interest();
+        dSize = fint->size();
+        std::copy(fint->begin(), fint->end(), flatint);
+     }
+     ndn::Block wire(flatint, dSize);
+     wire.parse();
+     try{
+        auto fdata = testFlat->data();
+	std::copy(fdata->begin(), fdata->end(), flatdata);
+        ndn::Block wire1(flatdata, fdata->size());
+        wire1.parse();
+	data.wireDecode(wire1);
      } 
-       catch (boost::exception& e){
-          ndn::KeyChain keyChain;
-          keyChain.sign(data);
+     catch (boost::exception& e){
+        ndn::KeyChain keyChain;
+        keyChain.sign(data);
   
-    }
-
-    //interest.wireDecode(wire);
-    //std::cout<<"Name Test interest: original "<<interest.getName()<<std::endl;
-    interest.wireDecode(wire);
-    //std::cout<<"Name Test interest: flat "<<interest.getName()<<std::endl;
+     }  
+     interest.wireDecode(wire);
   }
-   catch (boost::exception& e){
+  catch (boost::exception& e){
      interest.setName("a/test");
      interest.setCanBePrefix(false);
      const uint8_t bytes[3]={128, 1,255};
      interest.setApplicationParameters(bytes, 3);
      ndn::KeyChain keyChain;
      keyChain.sign(data);
-   } 
+  } 
+  
+  /*Desigh TODO: Decides whether to always do random changes to potoclos or to choose one of them each mutation
   int protocolChange = (rand()%100);
   if(protocolChange>50){
     //Do random change to protocol to wither face socket or something else
-  }
+  }*/
+
   ndn::Block temp(interest.wireEncode());
+  int dataCount = mutator.getDataCount();
+  int retransmitInterest = (rand()%300)-(300-dataCount);
+  if (retransmitInterest > 285){
+     int pos = (rand()%dataCount);
+     Size = constructInterest(flatint, temp, dataPks[pos], dataSizes[pos]);
+  }
 
- int retransmitInterest = (rand()%300)-(300-dataSize);
- if (retransmitInterest > 285){
-    int pos = (rand()%dataSize);
-    //Size = constructInterest(Data+1,temp, dataPks[pos], dataSizes[pos]);
-    Size = constructInterest(flatint, temp, dataPks[pos], dataSizes[pos]);
- }
-
- //Choose to respond to previous interest, should we be doing both interest and data or just one?
-  int satisfyInterest = (rand()%1000)-(1000-size);
-  if(satisfyInterest > 100 && size > 0){
-     int pos = (rand()%size);
+  //Choose to respond to previous interest, should we be doing both interest and data or just one?
+  int interestCount = mutator.getInterestCount();
+  int satisfyInterest = (rand()%1000)-(1000-interestCount);
+  if(satisfyInterest > 100 && interestCount > 0){
+     int pos = (rand()%interestCount);
      dataLen = DataCustomMutator(data.wireEncode(), interests[pos], dbytes, sizes[pos], MaxSize/2, seed);
      for(size_t i= 0;i<dataLen;i++){
-     dataPks[dpos][i] = dbytes[i];
-    }
-    dataSizes[dpos] = dataLen;
-    dpos++;
-    if(dpos == 300) dpos = 0;
-    if (dataSize != 300)dataSize++;
+        dataPks[dpos][i] = dbytes[i];
+     }
+     dataSizes[dpos] = dataLen;
+     dpos++;
+     if(dpos == 300) 
+        dpos = 0;
+     if (dataCount != 300)
+        mutator.incrementDataCount();
   }
-  size_t interestLength = LLVMFuzzerCustomMutator1(temp, flatint, Size, MaxSize/2, Seed);
+  size_t interestLength = mutator.LLVMFuzzerCustomMutator1(temp, flatint, Size, MaxSize/2, Seed);
 
-   //int socky = rand()%3;
-   //Data[0] = socky;
-   //Data++;
-   for(size_t i= 0;i<interestLength;i++){
-//   interests[cpos][i] = Data[i];
-   interests[cpos][i] = flatint[i];
-   }
+  for(size_t i= 0;i<interestLength;i++){
+     interests[cpos][i] = flatint[i];
+  }
   sizes[cpos] = interestLength;
   cpos++;
   if(cpos == 1000) cpos = 0;
-  if (size != 1000)size++;
+  if (interestCount != 1000)
+	  mutator.incrementInterestCount();
   for (size_t i=0; i<dataLen; i++)
-     //Data[i+interestLength] = dbytes[i];
      flatdata[i] = dbytes[i];
-  //std::vector<uint8_t> interestVector(&interests[cpos-1][0], &interests[cpos-1][interestLength]);
-  //std::vector<uint8_t> dataVector(&dbytes[0], &dbytes[dataLen]);
   std::vector<uint8_t> interestVector(&flatint[0], &flatint[interestLength]);
   std::vector<uint8_t> dataVector(&flatdata[0], &flatdata[dataLen]);
-  //for(size_t i= 0;i<interestLength;i++){
-  // printf("Original %x\n",Data[i]);
-  // printf("Copy %x\n",interestVector[i]);
-  //}
   int face = rand()%faceNum;
   auto inputInterest = builder.CreateVector(interestVector);
   auto inputData = builder.CreateVector(dataVector);
@@ -710,9 +610,8 @@ auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
   builder.Finish(genInput);
   uint8_t *buf = builder.GetBufferPointer();
   int bsize = builder.GetSize();
-//  std::cout<<"Compare the sizes boi: Interest+Data "<<interestLength+dataLen<<"  flatbuffer "<<bsize<<std::endl;
   for (int i=0; i<bsize; i++)
-    Data[i] = buf[i];
+     Data[i] = buf[i];
   free(flatint);
   free(flatdata);
   return bsize;
@@ -721,44 +620,38 @@ auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
 #endif  // CUSTOM_MUTATOR
 size_t DataCustomMutator(ndn::Block temp, uint8_t *inter, uint8_t *Dat, size_t Size,
                                           size_t MaxSize, unsigned int Seed) {
-// ndn::Interest interest;
-// try{
-   ndn::Block wire(inter, Size);
-   wire.parse();
-//   ndn::Name name;
-//   name.wireDecode(wire.elements()[0]);
-   ndn::Data data;
-   data.setName("space");
-   ndn::KeyChain keyChain;
-   keyChain.sign(data);
-   size_t totalLength;
-   ndn::EncodingEstimator estimator;
-   size_t estimatedSize = data.wireEncode(estimator);
-   ndn::Block nWire;
+  ndn::Block wire(inter, Size);
+  wire.parse();
+  ndn::Data data;
+  data.setName("space");
+  ndn::KeyChain keyChain;
+  keyChain.sign(data);
+  size_t totalLength;
+  ndn::EncodingEstimator estimator;
+  size_t estimatedSize = data.wireEncode(estimator);
+  ndn::Block nWire;
   do{ 
-   totalLength = 0;
-   ndn::EncodingBuffer encoder(estimatedSize, 0);
-  for(size_t i=0;i<temp.elements_size();i++){
-     if(temp.elements()[i].type()==ndn::tlv::Name)
-        totalLength += encoder.appendByteArrayBlock(ndn::tlv::Name, wire.elements()[0].value(), wire.elements()[0].value_size());
-     else
-        totalLength += encoder.appendByteArrayBlock(temp.elements()[i].type(), temp.elements()[i].value(), temp.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(ndn::tlv::Data);
-  nWire = encoder.block();
-  if (totalLength>PACKETSIZE){
-     temp =  ndn::Block(data.wireEncode());
-     temp.parse();
-
-  }
-  }while(totalLength>PACKETSIZE);
-  
-   for(size_t i= 0;i<totalLength;i++){
-        Dat[i] = nWire.wire()[i];
+     totalLength = 0;
+     ndn::EncodingBuffer encoder(estimatedSize, 0);
+     for(size_t i=0;i<temp.elements_size();i++){
+        if(temp.elements()[i].type()==ndn::tlv::Name)
+           totalLength += encoder.appendByteArrayBlock(ndn::tlv::Name, wire.elements()[0].value(), wire.elements()[0].value_size());
+        else
+           totalLength += encoder.appendByteArrayBlock(temp.elements()[i].type(), temp.elements()[i].value(), temp.elements()[i].value_size());
      }
+     totalLength += encoder.prependVarNumber(totalLength);
+     totalLength += encoder.prependVarNumber(ndn::tlv::Data);
+     nWire = encoder.block();
+     if (totalLength>PACKETSIZE){
+        temp =  ndn::Block(data.wireEncode());
+        temp.parse();
+     }
+  } while(totalLength>PACKETSIZE);
+  
+  for(size_t i= 0;i<totalLength;i++){
+     Dat[i] = nWire.wire()[i];
+  }
 
-  return LLVMFuzzerCustomMutator1(nWire, Dat, nWire.size(), MaxSize, Seed);
+  return mutator.LLVMFuzzerCustomMutator1(nWire, Dat, nWire.size(), MaxSize, Seed);
 }
 
