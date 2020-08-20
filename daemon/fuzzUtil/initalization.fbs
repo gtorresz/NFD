@@ -1,0 +1,11 @@
+// Example IDL file for our monster's schema.
+
+namespace FuzzTrace;
+
+table Initial {
+  seed:uint;
+  prefixes:[string];
+  faces:[int];
+  strategies:[string];
+}
+

@@ -58,6 +58,7 @@
 #include <cstdio>
 #include <ctime>
 #include "fuzzUtil/trace_generated.h"
+#include "fuzzUtil/initalization_generated.h"
 #ifdef HAVE_LIBPCAP
 #include <pcap/pcap.h>
 #endif
@@ -398,6 +399,7 @@ SetUp(){
      std::unique_lock<std::mutex> lock(seedMtx);
      cvar.wait(lock,[] {return seedSet; });
   }
+
   time_t rawtime;
   struct tm * timeinfo;
   time ( &rawtime );
@@ -407,8 +409,8 @@ SetUp(){
   sprintf(fr, "FuzzerTrace/packetTrace.csv");
   using namespace nfd;
   FILE* fp = fopen (fr, "w");
-  fprintf(fp, "packetType,face,bytes\n");
-  fclose(fp);
+//  fprintf(fp, "packetType,face,bytes\n");
+//  fclose(fp);
   std::string configFile = DEFAULT_CONFIG_FILE;
   NfdRunner runner(configFile);
   std::thread ribThread([&runner]{
@@ -421,8 +423,8 @@ SetUp(){
   ep = boost::asio::local::stream_protocol::endpoint(faces[0]);
   sock.connect(ep);
   Interest inte("setup");
-    inte.setCanBePrefix(true);
-      Block wireInt = inte.wireEncode();
+  inte.setCanBePrefix(true);
+  Block wireInt = inte.wireEncode();
   boost::asio::ip::tcp::endpoint endpoint( boost::asio::ip::address::from_string("0.0.0.0"), 6363);
   socktcp.connect(endpoint);
 
@@ -436,11 +438,16 @@ SetUp(){
   ndn::security::CommandInterestSigner m_signer(keyChain);
   Interest interest;
   ndn::Block wire;
- boost::asio::ip::udp::endpoint endpoint1(
+  boost::asio::ip::udp::endpoint endpoint1(
                          boost::asio::ip::address::from_string("0.0.0.0"), 6363);
-sockudp.connect(endpoint1);
-sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-int preCount = 0;
+
+  sockudp.connect(endpoint1);
+  sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+  int preCount = 0;
+  flatbuffers::FlatBufferBuilder builder(1024);
+  std::vector<std::string> prefixTrace; 
+  std::vector<std::string> stratTrace;
+  std::vector<int> faceTrace;
   for(int k = 0; k < PREFIXES; k++){
      int prefixBase = 0;
      if(preCount > 0) prefixBase = (rand()%3);
@@ -469,6 +476,7 @@ int preCount = 0;
         preName.wireDecode(preWire);
      }
      prefixes[k] = preName;
+     prefixTrace.push_back(preName.toUri());
      preCount++;
      free(buf);
 
@@ -476,7 +484,7 @@ int preCount = 0;
      int faceChoice = rand()%faceNum;
      while (float(stratUses[faceChoice])>=float(PREFIXES)/float(faceNum))
         faceChoice = rand()%faceNum;
-
+     faceTrace.push_back(faceChoice);
      parameters = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0).setFaceId(256+faceChoice);
      command = make_shared<ndn::nfd::RibRegisterCommand>();
      requestName = command->getRequestName(options.getPrefix(), parameters);
@@ -489,6 +497,7 @@ int preCount = 0;
      while (float(stratUses[stratChoice])>=float(PREFIXES)/float(stratNum))
             stratChoice = rand()%stratNum;
      stratUses[stratChoice]++;
+     stratTrace.push_back(strats[stratChoice]);
      parameters = ndn::nfd::ControlParameters().setName(prefixes[k]).setStrategy("ndn:/localhost/nfd/strategy/"+strats[stratChoice]);
      command = make_shared<ndn::nfd::StrategyChoiceSetCommand>();	     
      requestName = command->getRequestName(options.getPrefix(), parameters);
@@ -499,6 +508,19 @@ int preCount = 0;
      prefixStrat.insert(std::make_pair(preName.toUri(),strats[stratChoice]));
   }
   
+  auto initialPrefix = builder.CreateVectorOfStrings(prefixTrace);
+  auto initialStrat = builder.CreateVectorOfStrings(stratTrace);
+  auto initialFace = builder.CreateVector(faceTrace);
+  auto genInitial = FuzzTrace::CreateInitial(builder, fuzz_seed, initialPrefix, initialFace, initialStrat);
+  builder.Finish(genInitial);
+  uint8_t *buf = builder.GetBufferPointer();
+  int bsize = builder.GetSize();
+
+  for(int i = 0;i<bsize; i++)
+     fprintf(fp,"%02x", buf[i]);
+  fprintf(fp, "\n");
+  fclose(fp);
+
   {
      std::lock_guard<std::mutex> lock(mtx);
      setupComplete = true;

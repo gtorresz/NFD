@@ -30,6 +30,7 @@
 #include "common/logger.hpp"
 #include "common/privilege-helper.hpp"
 #include "core/version.hpp"
+
 #include <time.h>
 #include <string.h> // for strsignal()
 #include <sys/select.h>
@@ -50,14 +51,10 @@
 #include <ndn-cxx/version.hpp>
 #include <ndn-cxx/transport/unix-transport.hpp>
 #include "face/unix-stream-transport.hpp"
-#include <ndn-cxx/fuzzer-seed.hpp>
+#include <ndn-cxx/mutator.hpp>
+//#include "../../Fuzzer/FuzzerDefs.h"
 #include "face/pcap-helper.hpp"
-#include <unistd.h>
-#include <chrono>
-#include <cstdio>
-#include <ctime>
-#include "fuzzUtil/trace_generated.h"
-#include "fuzzUtil/initalization_generated.h"
+
 #ifdef HAVE_LIBPCAP
 #include <pcap/pcap.h>
 #endif
@@ -67,8 +64,7 @@
 #ifdef HAVE_WEBSOCKET
 #include <websocketpp/version.hpp>
 #endif
-#define PREFIXES 50
-#define PACKETSIZE 4096
+
 namespace po = boost::program_options;
 
 NFD_LOG_INIT(Main);
@@ -97,8 +93,8 @@ public:
     m_terminationSignalSet.add(SIGINT);
     m_terminationSignalSet.add(SIGTERM);
     m_terminationSignalSet.async_wait(bind(&NfdRunner::terminate, this, _1, _2));
- 
-     m_reloadSignalSet.add(SIGHUP);
+
+    m_reloadSignalSet.add(SIGHUP);
     m_reloadSignalSet.async_wait(bind(&NfdRunner::reload, this, _1, _2));
   }
 
@@ -107,15 +103,9 @@ public:
   {
     m_nfd.initialize();
   }
-  
-  void
-  addFibentry(ndn::Name Prefix)
-  {
-  m_nfd.addFibentry(Prefix);
-  }
 
   int
-  run(std::mutex& NFDmtx, std::condition_variable& cvar, bool& NFD_Running)
+  run()
   {
     // Return value: a non-zero value is assigned when either NFD or RIB manager (running in
     // a separate thread) fails.
@@ -165,12 +155,6 @@ public:
       std::unique_lock<std::mutex> lock(m);
       cv.wait(lock, [&ribIo] { return ribIo != nullptr; });
     }
-    
-    {
-       std::lock_guard<std::mutex> lock(NFDmtx);
-       NFD_Running = true;
-       cvar.notify_all();
-    }
 
     try {
       systemdNotify("READY=1");
@@ -184,6 +168,7 @@ public:
       NFD_LOG_FATAL(e.what());
       retval = 4;
     }
+
     {
   // ribIo is guaranteed to be alive at this point
       std::lock_guard<std::mutex> lock(m);
@@ -192,9 +177,7 @@ public:
         ribIo = nullptr;
       }
     }
-    
     ribThread.join();
-
 
     return retval;
   }
@@ -244,7 +227,27 @@ private:
   boost::asio::signal_set m_reloadSignalSet;
 };
 
+/*static void
+printUsage(std::ostream& os, const char* programName, const po::options_description& opts)
+{
+  os << "Usage: " << programName << " [options]\n"
+     << "\n"
+     << "Run the NDN Forwarding Daemon (NFD)\n"
+     << "\n"
+     << opts;
+}
+
+static void
+printLogModules(std::ostream& os)
+{
+  const auto& modules = ndn::util::Logging::getLoggerNames();
+  std::copy(modules.begin(), modules.end(), ndn::make_ostream_joiner(os, "\n"));
+  os << std::endl;
+}*/
+
 } // namespace nfd
+
+
 
 
 boost::asio::io_service m_ioService;
@@ -254,174 +257,160 @@ boost::asio::io_service m_ioService1;
 boost::asio::local::stream_protocol::socket sock1(m_ioService1);
 boost::asio::io_service m_ioService2;
 boost::asio::local::stream_protocol::socket sock2(m_ioService2);
-boost::asio::io_service m_ioServiceTCP;
-boost::asio::ip::tcp::socket socktcp(m_ioServiceTCP);
-boost::asio::io_service m_ioServiceUDP;
-boost::asio::ip::udp::socket sockudp(m_ioServiceUDP);
-boost::asio::ip::udp::socket sockudp1(m_ioServiceUDP);
-ndn::Name prefixes[PREFIXES];
-int seed;
-std::vector<std::string> faces = {"/run/nfd.sock","tcp4://0.0.0.0:6363","udp4://0.0.0.0:6363" };
-int faceNum = 3;
-int faceUses[3] = {0,0,0};
-std::vector<std::string> strats = {"best-route","access","asf","multicast","self-learning","ncc"};
-int stratNum = 6;
-int stratUses[6] = {0,0,0,0,0,0};
-std::unordered_map<std::string,std::string> prefixStrat;
-std::mutex mtx;
-std::mutex NFDmtx;
-std::condition_variable cvar;
-bool setupComplete = false;
-bool NFD_Running = false;
 
-void
-initializeSeed(unsigned Seed){
-   fuzz_seed = Seed;
-   srand(Seed);
+
+/*int 
+LLVMFuzzerTestOneInput1(const uint8_t *Data, size_t Size) 
+{
+ using namespace nfd;
+ if(Size <= 2 )return 0;
+boost::asio::local::stream_protocol::socket* s;
+ int socky = Data[0];
+ Data++;
+ Size--;
+ if(Size <= 2 )return 0;
+    ndn::Block wire(Data, Size);
+    wire.parse();
+
+
+if(socky==0){
+std::cout<<"sock\n";
+ s = &sock;
 }
-
-void 
-readLine(std::string bytes, uint8_t *flatbuffer){
-  int k =0;
-  for(size_t i=0; i < bytes.size(); i++){
-     uint8_t temp = 0;
-     if(bytes[i]-'0' > 9)
-        temp += (bytes[i]-'a'+10)*16;
-     else
-        temp += (bytes[i]-'0')*16;
-     i++;
-     if(bytes[i]-'0' > 9)
-        temp += (bytes[i]-'a'+10);
-     else
-        temp += (bytes[i]-'0');
-     flatbuffer[k] = temp;
-  //   printf("%02x", temp);
-     k++;
-  }
+else if(socky==1){
+std::cout<<"sock1\n";
+ s = &sock1;
 }
+else {
+std::cout<<"sock2\n";
+ s = &sock2;
+}
+ s->send(boost::asio::buffer(wire.wire(), wire.size()));
 
+
+  return 0;//runner.run();
+}
+*/
 int
 main(int argc, char** argv){
-
-  std::ifstream File(argv[1]);
-  std::string bytes;
-  getline(File, bytes);
-  uint8_t* flatbuffer = ( uint8_t*) malloc(sizeof(uint8_t)*(PACKETSIZE*2));
-  readLine(bytes, flatbuffer);
-  auto flatbuff = flatbuffers::GetRoot<FuzzTrace::Initial>(flatbuffer);
-  initializeSeed(flatbuff->seed());
-  time_t rawtime;
-  struct tm * timeinfo;
-  time ( &rawtime );
-  std::clock_t start;
-  start = std::clock();
-  timeinfo = localtime (&rawtime);
   using namespace nfd;
   std::string configFile = DEFAULT_CONFIG_FILE;
+  std::thread NFDThread([configFile]{//, &wire] {
   NfdRunner runner(configFile);
-  std::thread ribThread([&runner]{
-     runner.initialize();
-     return runner.run(NFDmtx, cvar, NFD_Running);
+  runner.initialize();
+  return runner.run();
   });
-  {  std::unique_lock<std::mutex> lock(NFDmtx);
-     cvar.wait(lock,[] {return NFD_Running;});
-  }
-  ep = boost::asio::local::stream_protocol::endpoint(faces[0]);
-  sock.connect(ep);
-  Interest inte("setup");
-  inte.setCanBePrefix(true);
-  Block wireInt = inte.wireEncode();
-  boost::asio::ip::tcp::endpoint endpoint( boost::asio::ip::address::from_string("0.0.0.0"), 6363);
-  socktcp.connect(endpoint);
 
+
+
+  ep = boost::asio::local::stream_protocol::endpoint("/run/nfd.sock");
+  struct timeval t;
+  t.tv_sec = 1;
+  t.tv_usec = 500000;
+  select(0, NULL, NULL, NULL, &t);
+  usleep(500000);
+  sock.connect(ep);
+  sock1.connect(ep);
+  sock2.connect(ep);
   ndn::nfd::CommandOptions options;
   ndn::security::SigningInfo signingInfo;
   options.setSigningInfo(signingInfo);
-  ControlParameters parameters;
-  shared_ptr<ControlCommand> command;
-  Name requestName;
+  ControlParameters parameters = ndn::nfd::ControlParameters().setName("/a").setFlags(0);
+  shared_ptr<ControlCommand> command = make_shared<ndn::nfd::RibRegisterCommand>();
+  //std::cout<<options.getPrefix()<<std::endl;
+  Name requestName = command->getRequestName(options.getPrefix(), parameters);
   ndn::KeyChain keyChain;
   ndn::security::CommandInterestSigner m_signer(keyChain);
-  Interest interest;
-  ndn::Block wire;
-  boost::asio::ip::udp::endpoint endpoint1(
-                         boost::asio::ip::address::from_string("0.0.0.0"), 6363);
-  sockudp.connect(endpoint1);
-  sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+  Interest interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+  interest.setInterestLifetime(options.getTimeout());
+  ndn::Block wire = interest.wireEncode();
+  sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+
+
+  ControlParameters parameters1 = ndn::nfd::ControlParameters().setName("/b").setFlags(0);
+  shared_ptr<ControlCommand> command1 = make_shared<ndn::nfd::RibRegisterCommand>();
+  //std::cout<<options.getPrefix()<<std::endl;
+  Name requestName1 = command1->getRequestName(options.getPrefix(), parameters1);
+  ndn::KeyChain keyChain1;
+  ndn::security::CommandInterestSigner m_signer1(keyChain1);
+  Interest interest1 = m_signer1.makeCommandInterest(requestName1, options.getSigningInfo());
+  interest1.setInterestLifetime(options.getTimeout());
+  ndn::Block wire1 = interest1.wireEncode();
+  sock1.send(boost::asio::buffer(wire1.wire(), wire1.size()));
+
+
+  ControlParameters parameters2 = ndn::nfd::ControlParameters().setName("/c").setFlags(0);
+  shared_ptr<ControlCommand> command2 = make_shared<ndn::nfd::RibRegisterCommand>();
+  //std::cout<<options.getPrefix()<<std::endl;
+  Name requestName2 = command2->getRequestName(options.getPrefix(), parameters2);
+  ndn::KeyChain keyChain2;
+  ndn::security::CommandInterestSigner m_signer2(keyChain2);
+  Interest interest2 = m_signer2.makeCommandInterest(requestName2, options.getSigningInfo());
+  interest2.setInterestLifetime(options.getTimeout());
+  ndn::Block wire2 = interest2.wireEncode();
+  sock2.send(boost::asio::buffer(wire2.wire(), wire2.size()));
+  //boost::asio::local::stream_protocol::endpoint lep = sock.local_endpoint();
+  //face::PcapHelper(ep.path());
+  std::ifstream File(argv[1]);
+//  std::ifstream File("packetTrace.csv");
+  std::string packetType, compare;
+  std::string bytes;
+//int he = 0;  
+  uint8_t* byt = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  boost::asio::local::stream_protocol::socket* s;
+  getline(File, packetType);
+  while(getline(File, packetType, ',')) {
+    //std::cout << "ID: " << he++ << "\n" ; 
   
-  for(int k = 0; k < PREFIXES; k++){
-    auto tempstring = flatbuff->prefixes()->Get(k);
-     Name prefix(tempstring->str());
-     std::cout<<flatbuff->faces()->Get(k)<<std::endl;
-     parameters = ndn::nfd::ControlParameters().setName(prefix).setFlags(0).setFaceId(256+flatbuff->faces()->Get(k));
-     command = make_shared<ndn::nfd::RibRegisterCommand>();
-     requestName = command->getRequestName(options.getPrefix(), parameters);
-     interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
-     interest.setInterestLifetime(options.getTimeout());
-     wire = interest.wireEncode();
-     sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+    std::string socket; 
+    getline(File, socket, ',');
+    if(socket=="0"){
+      //std::cout<<"sock\n";
+       s = &sock;
+    }
+    else if(socket=="1"){
+    //std::cout<<"sock1\n";
+       s = &sock1;
+    }
+    else {
+       //std::cout<<"sock2\n";
+       s = &sock2;
+    }
 
-     auto strat = flatbuff->strategies()->Get(k)->str();
-     parameters = ndn::nfd::ControlParameters().setName(prefix).setStrategy("ndn:/localhost/nfd/strategy/"+strat);
-     command = make_shared<ndn::nfd::StrategyChoiceSetCommand>();
-     requestName = command->getRequestName(options.getPrefix(), parameters);
-     interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
-     interest.setInterestLifetime(options.getTimeout());
-     wire = interest.wireEncode();
-     sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+
+    getline(File,bytes);
+    int k =0;
+//if (he == 45) continue;
+    for(size_t i=0; i < bytes.size(); i++){
+       uint8_t temp = 0;
+       if(bytes[i]-'0' > 9)
+           temp += (bytes[i]-'a'+10)*16;
+       else 
+           temp += (bytes[i]-'0')*16;
+       i++;
+       if(bytes[i]-'0' > 9)
+           temp += (bytes[i]-'a'+10);
+       else
+           temp += (bytes[i]-'0');
+       byt[k] = temp;
+//  printf("%02x", temp);
+       k++; 
   }
-  //struct timeval t;
-  //t.tv_usec = 1000;
-  //1select(0, NULL, NULL, NULL, &t);
-  string input;
-  while(getline(File, input)) {
-    std::cout<<"Testing...\n";
-     readLine(input, flatbuffer);
-     auto flatData = flatbuffers::GetRoot<FuzzTrace::Input>(flatbuffer);
-     uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
-     uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
-     int faceid = flatData->face();
-     auto testf = flatData->prefix()->str();
-     auto fint = flatData->interest();
-     std::copy(fint->begin(), fint->end(), &flatint[0]);
-     auto fdata = flatData->data();
-     std::copy(fdata->begin(), fdata->end(), flatdata);
-     ndn::Block wireInt(flatint,fint->size());
-     wireInt.parse();
+//printf("\n%d\n", k);
+// std::cout << "User:\n" << bytes << "\n" ;
 
-     Interest inte("hu/what");
-     inte.setCanBePrefix(true);
-     Block wire = inte.wireEncode();
-     inte.wireDecode(wireInt);
-     inte.setName(ndn::Name(testf+inte.getName().toUri()));
-     wireInt = inte.wireEncode();
-     inte.wireDecode(wireInt);
-     if(faceid == 0)
-        sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-     else if(faceid == 1)
-        socktcp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-     else
-        sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
-     if(fdata->size()!=0){
-        ndn::Block wire1(flatdata,fdata->size());
-	wire1.parse();
-	if(faceid == 0)
-           sock.send(boost::asio::buffer(wire1.wire(), wire1.size()));
-	else if(faceid == 1)
-           socktcp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
-	else
-           sockudp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
-     }
+    s->send(boost::asio::buffer(byt,k)); 
      struct timeval t1;
-     t1.tv_usec = 1000;
-     select(0, NULL, NULL, NULL, &t1);
-//     usleep(1000);
+       t1.tv_usec = 1000;
+        select(0, NULL, NULL, NULL, &t1); 
+   usleep(1000);
+//    LLVMFuzzerTestOneInput1();
   }
+  free(byt);
 
-  free(flatbuffer);
   std::cout<<"done\n";
   getMainIoService().stop();
-  //ribThread.join();
+  NFDThread.join();
   return 0;
 }
 
