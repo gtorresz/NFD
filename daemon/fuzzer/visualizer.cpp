@@ -2,9 +2,9 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-#include "fuzzUtil/trace_generated.h"
-#include "fuzzUtil/initalization_generated.h"
-#include "fuzzUtil/nfd_runner.hpp"
+#include "util/trace_generated.h"
+#include "util/initalization_generated.h"
+#include "nfd_runner.hpp"
 
 namespace po = boost::program_options;
 

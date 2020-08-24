@@ -8,11 +8,11 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "mutator.hpp"
-#include "nameMutator.hpp"
-#include "forwardingHintMutator.hpp"
-#include "signatureInfoMutator.hpp"
-#include "appParameterMutator.hpp"
-#include "metaInfoMutator.hpp"
+#include "mutator-modules/nameMutator.hpp"
+#include "mutator-modules/forwardingHintMutator.hpp"
+#include "mutator-modules/signatureInfoMutator.hpp"
+#include "mutator-modules/appParameterMutator.hpp"
+#include "mutator-modules/metaInfoMutator.hpp"
 
 
 namespace ndn {

@@ -168,16 +168,16 @@ def build(bld):
                                        'daemon/face/unix*.cpp',
                                        'daemon/face/websocket*.cpp',
                                        'daemon/main.cpp',
-                                       'daemon/fuzzer.cpp',
-    				       'daemon/visualizer.cpp',
-                                       'daemon/fuzzUtil/*']),
+                                       'daemon/fuzzer/fuzzer.cpp',
+    				       'daemon/fuzzer/visualizer.cpp',
+                                       'daemon/fuzzer/mutator.cpp']),
         use='core-objects',
         includes='daemon',
         export_includes='daemon')
 
     fuzz_objects = bld.objects(
         target='fuzz-objects',
-        source=bld.path.ant_glob( 'daemon/fuzzUtil/*.cpp'), #'daemon/**/*.cpp',
+        source=bld.path.ant_glob( 'daemon/fuzzer/mutator.cpp'), #'daemon/**/*.cpp',
         #                         excl=['daemon/face/*ethernet*.cpp',
         #                               'daemon/face/pcap*.cpp',
         #                               'daemon/face/unix*.cpp',
@@ -211,18 +211,18 @@ def build(bld):
                 use='daemon-objects SYSTEMD')
 
     bld.program(name='fuzz',
-                target='daemon/fuzzer',
-                source='daemon/fuzzer.cpp',
+                target='daemon/fuzzer/fuzzer',
+                source='daemon/fuzzer/fuzzer.cpp',
                 use='fuzz-objects SYSTEMD',
                 ldflags = ['-fsanitize=address', '../../libFuzzer.a','-fprofile-instr-generate', ],
                 cxxflags = ['-fsanitize=address,fuzzer-no-link','-DFUZZTESTING','-DTEST','-DCUSTOM_MUTATOR','-fprofile-instr-generate', '-fcoverage-mapping']) 
    
     bld.program(name='visualizer',
-                target='daemon/visualizer',
-                source='daemon/visualizer.cpp',
+                target='daemon/fuzzer/visualizer',
+                source='daemon/fuzzer/visualizer.cpp',
                 use='daemon-objects SYSTEMD',
                 ldflags = ['-fprofile-instr-generate'],
-                cxxflags = ['-fprofile-instr-generate', '-fcoverage-mapping'])            
+                cxxflags = ['-fprofile-instr-generate', '-fcoverage-mapping','-DFUZZTESTING'])            
  
     bld.recurse('tools')
     bld.recurse('tests')

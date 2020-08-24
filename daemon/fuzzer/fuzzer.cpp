@@ -2,11 +2,10 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-#include "fuzzUtil/trace_generated.h"
-#include "fuzzUtil/initalization_generated.h"
-#include "fuzzUtil/nfd_runner.hpp"
+#include "util/trace_generated.h"
+#include "util/initalization_generated.h"
+#include "nfd_runner.hpp"
 
-//namespace po = boost::program_options;
 
 size_t DataCustomMutator(ndn::Block temp, uint8_t *inter, uint8_t *Dat, size_t Size,
                                           size_t MaxSize, unsigned int Seed);
@@ -14,6 +13,9 @@ int *k;
 char fr[100000];
 char ***c;
 ndn::Mutator mutator(INT_HIST_SIZE, DAT_HIST_SIZE);
+bool wasMutated = true;
+bool corpusRun = false;
+
 extern "C" int LLVMFuzzerInitialize(int *argc, char ***argv) {
    k = argc;
    c = argv;
@@ -53,36 +55,50 @@ std::mutex seedMtx;
 extern "C" int 
 LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) 
 {
-	
+
+  //Wait fo setup to complete before proceeding	
   {
      std::unique_lock<std::mutex> lock(mtx);
      cvar.wait(lock,[] {return setupComplete; });  
   }
-
+ 
   using namespace nfd;
-  if(Size <= 2 )return 0;
+  //Ensure input is not empty and that it has been freshly mutated
+  if(Size <= 2 || !wasMutated)
+     return 0;
 
+  //Ensure corpus is not being checked before setting mutation flag
+  else if(corpusRun) 
+     wasMutated = false;
+
+  //read in flat buffer data and extraced need variables
   uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*Size);
   std::copy(&Data[0], &Data[Size], &buf[0]);
   auto flatData = flatbuffers::GetRoot<FuzzTrace::Input>(buf);
   uint8_t *flatint = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
   uint8_t *flatdata = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE);
+  //Get face ID and prefix
   int faceid = flatData->face();
   auto testf = flatData->prefix()->str();
+  //Get interest and save to buffer for interest
   auto fint = flatData->interest();
   std::copy(fint->begin(), fint->end(), &flatint[0]);
+  //Get data and save to data buffer
   auto fdata = flatData->data();
   std::copy(fdata->begin(), fdata->end(), flatdata);
+
+  //Create interest from interest buffer and prepend prefix, then convert to block wire
   ndn::Block wireInt(flatint,fint->size());
   wireInt.parse();
   Interest inte("hu/what");
   inte.setCanBePrefix(true);
   Block wire = inte.wireEncode();
-  FILE* fp = fopen (fr, "a");
   inte.wireDecode(wireInt);
   inte.setName(ndn::Name(testf+inte.getName().toUri()));
   wireInt = inte.wireEncode();
   inte.wireDecode(wireInt);
+
+  //Send interest through appropriate socket
   if(faceid == 0)
      sock.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
   else if(faceid == 1)
@@ -90,10 +106,13 @@ LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
   else 
      sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
   //const uint8_t* writeBytes = wireInt.wire();
+  
+   //Check if input had data packet
   if(fdata->size()!=0){
+     //If so convert to block and send through socket
      ndn::Block wire1(flatdata,fdata->size());
      wire1.parse();
-
+     
      if(faceid == 0)
         sock.send(boost::asio::buffer(wire1.wire(), wire1.size()));
      else if(faceid == 1)
@@ -101,10 +120,14 @@ LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
      else
         sockudp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
   }
+
+  //Save input to trace
+  FILE* fp = fopen (fr, "a");
   for(size_t i = 0;i<Size; i++)
      fprintf(fp,"%02x", Data[i]);
   fprintf(fp, "\n");
   fclose(fp);
+
   free(flatdata);
   free(flatint);
   free(buf);
@@ -122,77 +145,89 @@ initializeSeed(unsigned Seed){
 
 extern "C" void
 SetUp(){
+  
+  //Ensure seed is set before continuing 
   {
      std::unique_lock<std::mutex> lock(seedMtx);
      cvar.wait(lock,[] {return seedSet; });
   }
 
+  //Get Time info for unique trace name
   time_t rawtime;
   struct tm * timeinfo;
   time ( &rawtime );
-  std::clock_t start;
-  start = std::clock();
   timeinfo = localtime (&rawtime);
   sprintf(fr, "FuzzerTrace/packetTrace.csv");
-  using namespace nfd;
   FILE* fp = fopen (fr, "w");
+  
+  using namespace nfd;
+
+  //Start NFD in new thread, and pass in mutex and condition variable for synching
   std::string configFile = DEFAULT_CONFIG_FILE;
   NfdRunner runner(configFile);
   std::thread ribThread([&runner]{
      runner.initialize();
      return runner.run(NFDmtx, cvar, NFD_Running);
   });
+
+  //Ensure NFD is running before continuing
   {  std::unique_lock<std::mutex> lock(NFDmtx);
      cvar.wait(lock,[] {return NFD_Running;});
   }
+
+  //Create Unix face and socket
   ep = boost::asio::local::stream_protocol::endpoint(faces[0]);
   sock.connect(ep);
-  Interest inte("setup");
-  inte.setCanBePrefix(true);
-  Block wireInt = inte.wireEncode();
+
+ //Create TCP face and socket
   boost::asio::ip::tcp::endpoint endpoint( boost::asio::ip::address::from_string("0.0.0.0"), 6363);
   socktcp.connect(endpoint);
 
-  ndn::nfd::CommandOptions options;
-  ndn::security::SigningInfo signingInfo;
-  options.setSigningInfo(signingInfo);
-  ControlParameters parameters;
-   shared_ptr<ControlCommand> command;
-  Name requestName;
-  ndn::KeyChain keyChain;
-  ndn::security::CommandInterestSigner m_signer(keyChain);
-  Interest interest;
-  ndn::Block wire;
-  boost::asio::ip::udp::endpoint endpoint1(
-                         boost::asio::ip::address::from_string("0.0.0.0"), 6363);
-
+  //Create UDP socket
+  boost::asio::ip::udp::endpoint endpoint1(boost::asio::ip::address::from_string("0.0.0.0"), 6363);
   sockudp.connect(endpoint1);
+  //Create and send setup interest for UDP face creation
+  Interest inte("setup");
+  inte.setCanBePrefix(true);
+  Block wireInt = inte.wireEncode();
   sockudp.send(boost::asio::buffer(wireInt.wire(), wireInt.size()));
+ 
+  //Create a variable to check amount of prefixes currently created
   int preCount = 0;
+  //Use flatbuffer in order to save prefix, face, and strategy information to trace file
   flatbuffers::FlatBufferBuilder builder(1024);
   std::vector<std::string> prefixTrace; 
   std::vector<std::string> stratTrace;
   std::vector<int> faceTrace;
+
+  //Create prefixes; amount determened by PREFIXES macro
   for(int k = 0; k < PREFIXES; k++){
-     int prefixBase = 0;
-     if(preCount > 0) prefixBase = (rand()%3);
+
+     int prefixBase = 0; //Used to determine wheater a preivous prefix should be used as a base for a new prefix
+     if(preCount > 0) 
+        prefixBase = (rand()%3);// 33% chance that a completely original prefix will be made
      ndn::Name preName;
      int additions = 0;
+     //Create original prefix
      if(prefixBase == 0){
         additions = (rand()%25)+1;
         preName = ndn::Name("");
      }
+     //Base Prefix of an exisiting onr
      else {
         int base = rand()%preCount;
         preName = ndn::Name(prefixes[base].toUri());
         int components = 0;
+	//Ensure that additions either subtract or add
         while(additions == 0){
-           components = (rand()%25)+1;
-           additions = components - (int)preName.size();
+           components = (rand()%25)+1;//Compute total number of components in new interest
+           additions = components - (int)preName.size();//Determine weather the amount is additive or subtractive
         }
         if(additions < 0)
            preName = ndn::Name(prefixes[base].getSubName(0,components).toUri());
      }
+
+     //Add components if applicable
      ndn::Block preWire = preName.wireEncode();
      uint8_t *buf = ( uint8_t*) malloc(sizeof(uint8_t)*PACKETSIZE/2);
      for(int j = 0; j < additions; j++){
@@ -200,29 +235,40 @@ SetUp(){
         preWire = ndn::Block(buf,bsize);
         preName.wireDecode(preWire);
      }
-     prefixes[k] = preName;
-     prefixTrace.push_back(preName.toUri());
+     prefixes[k] = preName;//Save to global storage
+     prefixTrace.push_back(preName.toUri());//Save to trace info
      preCount++;
      free(buf);
 
-
+     //Get face for prefixe's next hop 
      int faceChoice = rand()%faceNum;
      while (float(stratUses[faceChoice])>=float(PREFIXES)/float(faceNum))
         faceChoice = rand()%faceNum;
-     faceTrace.push_back(faceChoice);
-     parameters = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0).setFaceId(256+faceChoice);
-     command = make_shared<ndn::nfd::RibRegisterCommand>();
-     requestName = command->getRequestName(options.getPrefix(), parameters);
-     interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
+     faceTrace.push_back(faceChoice);//Save to trace info
+   
+     //Send command to NFD to set route with prefix and face as next hop 
+     ndn::nfd::CommandOptions options;
+     ndn::security::SigningInfo signingInfo;
+     options.setSigningInfo(signingInfo);
+     ndn::KeyChain keyChain;
+     ndn::security::CommandInterestSigner m_signer(keyChain);
+     ControlParameters parameters = ndn::nfd::ControlParameters().setName(prefixes[k]).setFlags(0).setFaceId(256+faceChoice);
+     shared_ptr<ControlCommand> command = make_shared<ndn::nfd::RibRegisterCommand>();
+     Name requestName = command->getRequestName(options.getPrefix(), parameters);
+     Interest interest = m_signer.makeCommandInterest(requestName, options.getSigningInfo());
      interest.setInterestLifetime(options.getTimeout());
-     wire = interest.wireEncode();
+     ndn::Block wire = interest.wireEncode();
      sock.send(boost::asio::buffer(wire.wire(), wire.size()));
 
+     //Choose strategy for prefix
      int stratChoice = rand()%stratNum;
      while (float(stratUses[stratChoice])>=float(PREFIXES)/float(stratNum))
             stratChoice = rand()%stratNum;
      stratUses[stratChoice]++;
-     stratTrace.push_back(strats[stratChoice]);
+     prefixStrat.insert(std::make_pair(preName.toUri(),strats[stratChoice]));//Save to global storage
+     stratTrace.push_back(strats[stratChoice]);//Save to trace info
+      
+     //Send command to NFD to assign stategy to given prefix
      parameters = ndn::nfd::ControlParameters().setName(prefixes[k]).setStrategy("ndn:/localhost/nfd/strategy/"+strats[stratChoice]);
      command = make_shared<ndn::nfd::StrategyChoiceSetCommand>();	     
      requestName = command->getRequestName(options.getPrefix(), parameters);
@@ -233,6 +279,7 @@ SetUp(){
      prefixStrat.insert(std::make_pair(preName.toUri(),strats[stratChoice]));
   }
   
+  //Create a flatbuffer for trace with initialization information
   auto initialPrefix = builder.CreateVectorOfStrings(prefixTrace);
   auto initialStrat = builder.CreateVectorOfStrings(stratTrace);
   auto initialFace = builder.CreateVector(faceTrace);
@@ -241,16 +288,19 @@ SetUp(){
   uint8_t *buf = builder.GetBufferPointer();
   int bsize = builder.GetSize();
 
+  //Write flatbuffer to trace
   for(int i = 0;i<bsize; i++)
      fprintf(fp,"%02x", buf[i]);
   fprintf(fp, "\n");
   fclose(fp);
 
+  //Inform main thread that setup is complete
   {
      std::lock_guard<std::mutex> lock(mtx);
      setupComplete = true;
      cvar.notify_all();
   }
+  //Merge thread with NFD thread
   ribThread.join();
   return;
 }
@@ -261,6 +311,10 @@ LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize);
 
 extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
                                           size_t MaxSize, unsigned int Seed) {
+
+  corpusRun = true;
+  wasMutated = true;
+
   auto testFlat = flatbuffers::GetMutableRoot<FuzzTrace::Input>(Data);
   seed = Seed;
   size_t dataLen = 0;
@@ -335,22 +389,42 @@ extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
 
   std::vector<uint8_t> interestVector(&flatint[0], &flatint[interestLength]);
   std::vector<uint8_t> dataVector(&flatdata[0], &flatdata[dataLen]);
-  mutator.addToInterestHistory(&interestVector, interestLength);
+ //mutator.addToInterestHistory(&interestVector, interestLength);
   int face = rand()%faceNum;
+
+  //Create flatbuffer input
   auto inputInterest = builder.CreateVector(interestVector);
   auto inputData = builder.CreateVector(dataVector);
-  int prefixId = (rand()%PREFIXES);			 
-  auto inputPrefix = builder.CreateString(prefixes[prefixId].toUri());
+  //Choose random prefix
+  int prefixId = (rand()%PREFIXES);
+  std::string randPrefix = prefixes[prefixId].toUri();  
+  auto inputPrefix = builder.CreateString(randPrefix);
   auto inputStrategy = builder.CreateString(prefixStrat[prefixes[prefixId].toUri()]);
   auto genInput = FuzzTrace::CreateInput(builder, face,inputInterest, inputData, inputPrefix, inputStrategy);
   builder.Finish(genInput);
+  //Get flatbuffer bytes and size
   uint8_t *buf = builder.GetBufferPointer();
   int bsize = builder.GetSize();
+
+  //Create interest with prefix appended and add to mutator history of sent interests
+  ndn::Interest histInterest("temp");
+  ndn::Block histWire(&flatint[0],interestLength);
+  histWire.parse(); 
+  histInterest.wireDecode(histWire);
+  histInterest.setName(ndn::Name(randPrefix+histInterest.getName().toUri()));
+  histWire = histInterest.wireEncode();
+  interestVector = std::vector<uint8_t>(&histWire.wire()[0], &histWire.wire()[histWire.size()]);
+  mutator.addToInterestHistory(&interestVector, histWire.size());
+
+
+  //Ensure we are not over the size limit, should not happen but if it does do not use input.
   if(size_t(bsize)>MaxSize){
      free(flatint);
      free(flatdata);
-     return Size;
+     return 0;
   }
+
+  //Write input over the old input and return the new size
   for (int i=0; i<bsize; i++)
      Data[i] = buf[i];
   free(flatint);
