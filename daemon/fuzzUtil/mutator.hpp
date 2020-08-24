@@ -7,15 +7,17 @@
 #include "ndn-cxx/security/transform/stream-sink.hpp"
 #include <iostream>
 // Enclosing code in ndn simplifies coding (can also use `using namespace ndn`)
-#include <stdint.h>
-#include <stddef.h>
-
+#include "flatbuffers/flatbuffers.h"
 
 namespace ndn {
 class Mutator{
- public:
- Mutator(){
- }
+public:
+
+Mutator(int IHMS, int DHMS){
+   interestHistoryMaxSize = IHMS;
+   dataHistoryMaxSize = DHMS;
+}
+
 size_t deleteComponent(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize);
 size_t copyCurrentCompnents(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize);
 size_t suffleComponents(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize);
@@ -35,12 +37,9 @@ Block createField(Block wire, uint32_t field);
 size_t LLVMFuzzerCustomMutator1(Block wire, uint8_t *Dat, size_t Size,size_t MaxSize, unsigned int Seed);
 uint32_t randomlyChooseSubField(Block m_wire, unsigned int Seed);
 size_t addPrefixCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize);
+
 size_t getInterestCount(){
    return interestCount;
-}
-
-void incrementInterestCount(){
-   interestCount++;
 }
 
 size_t getDataCount(){
@@ -50,9 +49,72 @@ size_t getDataCount(){
 void incrementDataCount(){
 	   dataCount++;
 }
+
+int getInterestEndpoint(){
+return interestVectorEndpoint;
+}
+
+void addToInterestHistory(std::vector<uint8_t>* interest, size_t size){
+  if (interestCount <= interestHistoryMaxSize){
+     interestCount++;
+     interestVector.push_back(std::vector<uint8_t>(interest->begin(), interest->end()));
+     interestSizes.push_back(size);
+  }
+  else {
+     interestVector[interestVectorEndpoint] = std::vector<uint8_t>(interest->begin(), interest->end());
+     interestSizes[interestVectorEndpoint] = size;
+  }
+
+  interestVectorEndpoint++;
+  if(interestVectorEndpoint>=interestHistoryMaxSize)
+     interestVectorEndpoint=0; 
+}
+
+void addToDataHistory(std::vector<uint8_t>* data, size_t size){
+  if (dataCount <= dataHistoryMaxSize){
+     dataCount++;
+     dataVector.push_back(std::vector<uint8_t>(data->begin(), data->end()));
+     dataSizes.push_back(size);
+  }
+  else {
+     dataVector[dataVectorEndpoint] = std::vector<uint8_t>(data->begin(), data->end());
+     dataSizes[dataVectorEndpoint] = size;
+  }
+
+  dataVectorEndpoint++;
+  if(dataVectorEndpoint >= dataHistoryMaxSize)
+     dataVectorEndpoint=0;
+}
+
+void getInterestAt(uint8_t* InterestBytes, int pos){
+  interestVector[pos];
+  std::copy(interestVector[pos].begin(), interestVector[pos].end(), &InterestBytes[0]);
+}
+
+void getDataAt(uint8_t* DataBytes, int pos){
+  dataVector[pos];
+  std::copy(dataVector[pos].begin(), dataVector[pos].end(), &DataBytes[0]);
+}
+
+size_t getInterestSize(int pos){
+return interestSizes[pos] ;
+}
+
+size_t getDataSize(int pos){
+   return dataSizes[pos] ;
+}
+
 private:
 int interestCount = 0;
 int dataCount = 0;
+int interestVectorEndpoint = 0;
+int dataVectorEndpoint = 0;
+int interestHistoryMaxSize;
+int dataHistoryMaxSize;
+std::vector<std::vector<uint8_t>> interestVector;
+std::vector<size_t> interestSizes;
+std::vector<std::vector<uint8_t>> dataVector;
+std::vector<size_t> dataSizes;
 };
 
 } // namespace ndn
