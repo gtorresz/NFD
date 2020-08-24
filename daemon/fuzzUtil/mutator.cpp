@@ -1,25 +1,3 @@
-/*
-  * Copyright (c) 2013-2018 Regents of the University of California.
- *
- * This file is part of ndn-cxx library (NDN C++ library with eXperimental eXtensions).
- *
- * ndn-cxx library is free software: you can redistribute it and/or modify it under the
- *  terms of the GNU Lesser General Public License as published by the Free Software
- * Foundation, either version 3 of the License, or (at your option) any later version.
- *
- * ndn-cxx library is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-  * PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details.
- *
- * You should have received copies of the GNU General Public License and GNU Lesser
- * General Public License along with ndn-cxx, e.g., in COPYING.md file.  If not, see
- * <http://www.gnu.org/licenses/>.
- *
- * See AUTHORS.md for complete list of ndn-cxx authors and contributors.
- *
- * @author Alexander Afanasyev <http://lasr.cs.ucla.edu/afanasyev/index.html>
- */
-
 #include <ndn-cxx/face.hpp>
 #include "ndn-cxx/encoding/buffer-stream.hpp"
 #include "ndn-cxx/security/transform/digest-filter.hpp"
@@ -30,11 +8,17 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "mutator.hpp"
+#include "nameMutator.hpp"
+#include "forwardingHintMutator.hpp"
+#include "signatureInfoMutator.hpp"
+#include "appParameterMutator.hpp"
+#include "metaInfoMutator.hpp"
 
 
 namespace ndn {
 extern "C" size_t
 LLVMFuzzerMutate(uint8_t *Dat, size_t Size, size_t MaxSize);
+
 size_t Mutator::LLVMFuzzerCustomMutator1(Block wire, uint8_t *Dat, size_t Size,
 		                                          size_t MaxSize, unsigned int Seed){
   srand (Seed);
@@ -69,20 +53,17 @@ size_t Mutator::LLVMFuzzerCustomMutator1(Block wire, uint8_t *Dat, size_t Size,
   }
   Block subwire = *element;
 
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   size_t len;
   const uint8_t* loopwire = element->value();
   for(i = 0; i < element->value_size(); i++){
      bytes1[i] = loopwire[i];
-     }
+  }
 
   if (field ==  tlv::Name){
      len = mutateName(subwire, Seed, bytes1,Size, MaxSize);
-}
-//  else if(field == tlv::Selectors){
-//     len = mutateSelectors(subwire, Seed, bytes1, Size, MaxSize);
-//  }
+  }
   else if(field == tlv::ForwardingHint){
      len = mutateForwardingHint(subwire, Seed, bytes1,Size, MaxSize);
   }
@@ -126,12 +107,11 @@ size_t Mutator::LLVMFuzzerCustomMutator1(Block wire, uint8_t *Dat, size_t Size,
          size_t Length = tempEncoder.prependByteArray(bytes1, len);
          Length += tempEncoder.prependVarNumber(len);
          Length += tempEncoder.prependVarNumber(tlv::ApplicationParameters);
-         uint8_t* bytes2 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
-         size_t namelen = computeDigest(wire.elements()[i], tempEncoder.block(), field, Seed, bytes2, Size, MaxSize);
+         uint8_t* digest = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
+         size_t namelen = computeDigest(wire.elements()[i], tempEncoder.block(), field, Seed, digest, Size, MaxSize);
 
-         totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), bytes2 , namelen);
-         free(bytes2);
-
+         totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), digest, namelen);
+         free(digest);
      }
      else
         totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
@@ -140,15 +120,17 @@ size_t Mutator::LLVMFuzzerCustomMutator1(Block wire, uint8_t *Dat, size_t Size,
   totalLength += encoder.prependVarNumber(totalLength);
   totalLength += encoder.prependVarNumber(wire.type());
   const uint8_t* bytes2 = encoder.block().wire();
+  free(bytes1);
   if(encoder.block().size()>MaxSize) return Size;
 
   for(size_t j = 0; j < encoder.block().size(); j++){
      Dat[j] = bytes2[j];
   }
 
-   free(bytes1);
    return encoder.block().size();
 }
+
+
 size_t Mutator::deleteComponent(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
   if(wire.elements_size() < 2)return wire.size();
   size_t totalLength = 0;
@@ -181,7 +163,6 @@ size_t Mutator::deleteComponent(Block wire, unsigned int Seed, uint8_t* Dat, siz
 
 
 size_t Mutator::computeDigest(Block wire, Block subwire, uint32_t field, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  //if (wire.elements_size() == 0 ) return wire.value_size();
   wire.parse();
   size_t totalLength = 0;
   EncodingEstimator estimator;
@@ -198,13 +179,9 @@ size_t Mutator::computeDigest(Block wire, Block subwire, uint32_t field, unsigne
          OBufferStream out;
          in >> digestFilter(DigestAlgorithm::SHA256) >> streamSink(out);
          subwire.parse();
-  //       std::for_each(subwire.elements_begin(), subwire.elements_end(), [&] (const Block& b) {
-  //          in.write(b.wire(), b.size());
-    //     });
             in.write(subwire.wire(), subwire.size());
          in.end();
           out.buf();
-         //Block temp(out.buf());
          auto digestComponent = name::Component::fromParametersSha256Digest(out.buf());
          Block wi = digestComponent.wireEncode();
          totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(),  wi.value(), wi.value_size());
@@ -302,13 +279,9 @@ uint32_t Mutator::randomlyChooseField(Block m_wire, unsigned int Seed, int ensur
 uint32_t Mutator::randomlyChooseSubField(Block m_wire, unsigned int Seed){
   int ele;
   m_wire.parse();
-  //uint32_t selectorFields [6]= {tlv::MinSuffixComponents, tlv::MaxSuffixComponents, tlv::ChildSelector, tlv::MustBeFresh} ;
   uint32_t sigInfoFields [7]= {tlv::SignatureType, tlv::KeyLocator, tlv::AdditionalDescription, tlv::DescriptionEntry, tlv::DescriptionKey, tlv::DescriptionValue, tlv::ValidityPeriod} ;
- uint32_t metaInfoFields [3]={tlv::ContentType, tlv::FreshnessPeriod, tlv::FinalBlockId};
-  if(m_wire.type() == tlv::Selectors){
-     ele = (rand()%4);
-     return 0;} // selectorFields[ele];}
-  else if(m_wire.type() == tlv::SignatureInfo){
+  uint32_t metaInfoFields [3]={tlv::ContentType, tlv::FreshnessPeriod, tlv::FinalBlockId};
+  if(m_wire.type() == tlv::SignatureInfo){
      ele = (rand()%6);
      return sigInfoFields[ele];  
   }
@@ -344,92 +317,6 @@ size_t Mutator::mutateNonsubTLVfield(Block wire, uint32_t field, unsigned int Se
    return len;
 }
 
-//size_t Mutator::mutateSelectors(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-//return 0;//Handle this
-/*
-  uint32_t field = randomlyChooseSubField(wire, Seed);
-  size_t len;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
-  size_t i;
-  wire.parse();
-  Block::element_const_iterator element = wire.find(field);
-  if (element == wire.elements_end()){
-     wire = createField(wire, field);
-     wire.parse();
-     element = wire.find(field);
-  }
-  const uint8_t* byteTransfer = element->value();
-  for(i = 0; i < element->value_size(); i++){
-     bytes1[i] = byteTransfer[i];
-  }
-  if (field ==  tlv::Exclude){
-     return 0;
-  }
-  else if(field == tlv::KeyLocator){
-     return 0;
-  }
-  else{
-     len = mutateNonsubTLVfield(wire, field, Seed, bytes1, Size, MaxSize);
-}  size_t totalLength = 0;
-
-  EncodingEstimator estimator;
-  Selectors selector;
-  size_t estimatedSize = selector.wireEncode(estimator);
-
-  EncodingBuffer encoder(estimatedSize, 0);
-
-  Block::element_const_iterator val = wire.find(tlv::MustBeFresh);
-  if (val != wire.elements_end()){
-     if(field == tlv::MustBeFresh)
-        totalLength += encoder.prependByteArrayBlock(tlv::MustBeFresh,  bytes1, len);
-     else
-        totalLength += encoder.prependByteArrayBlock(tlv::MustBeFresh,  val->value(), val->value_size());
-  }
-  val = wire.find(tlv::ChildSelector);
-  if (val != wire.elements_end()){
-     if(field == tlv::ChildSelector)
-        totalLength += encoder.prependByteArrayBlock(tlv::ChildSelector,  bytes1, len);
-     else
-        totalLength += encoder.prependByteArrayBlock(tlv::ChildSelector,  val->value(), val->value_size());
-  }
-  val = wire.find(tlv::Exclude);
-  if (val != wire.elements_end()){
-     if(field == tlv::Exclude)
-        totalLength += encoder.prependByteArrayBlock(tlv::Exclude,  bytes1, len);
-     else
-        totalLength += encoder.prependByteArrayBlock(tlv::Exclude,  val->value(), val->value_size());
-  }
-  val = wire.find(tlv::KeyLocator);
-  if (val != wire.elements_end()){
-     if(field == tlv::KeyLocator)
-        totalLength += encoder.prependByteArrayBlock(tlv::KeyLocator,  bytes1, len);
-     else
-        totalLength += encoder.prependByteArrayBlock(tlv::KeyLocator,  val->value(), val->value_size());
-  }
-  val = wire.find(tlv::MaxSuffixComponents);
-  if (val != wire.elements_end()){
-     if(field == tlv::MaxSuffixComponents)
-        totalLength += encoder.prependByteArrayBlock(tlv::MaxSuffixComponents,  bytes1, len);
-     else
-        totalLength += encoder.prependByteArrayBlock(tlv::MaxSuffixComponents,  val->value(), val->value_size());
-  }
- val = wire.find(tlv::MinSuffixComponents);
- if (val != wire.elements_end()){
-     if(field == tlv::MinSuffixComponents)
-        totalLength += encoder.prependByteArrayBlock(tlv::MinSuffixComponents,  bytes1, len);
-     else
-        totalLength += encoder.prependByteArrayBlock(tlv::MinSuffixComponents,  val->value(), val->value_size());
-  }
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::Selectors); 
-
-  const uint8_t* bytes2 = encoder.block().wire();
-  for(size_t j = 0; j < encoder.block().size(); j++){
-     Dat[j] = bytes2[j];
-  }
- free(bytes1);
- return totalLength;
-*///}
 
 Block Mutator::createField(Block wire, uint32_t field ){
   if(wire.type()==tlv::Interest){
@@ -438,9 +325,6 @@ Block Mutator::createField(Block wire, uint32_t field ){
      DelegationList del;
      Name hname("test");
      switch(field) {
-      case tlv::Selectors :
-        interest.setMustBeFresh(true);
-	break;
       case tlv::Nonce :
         interest.setNonce(0);
         break;
@@ -498,7 +382,7 @@ Block Mutator::createField(Block wire, uint32_t field ){
      }
      return sig.wireEncode();
   }
-  else {//if(wire.type()==tlv::MetaInfo){
+  else {
      MetaInfo mInfo;
      mInfo.wireDecode(wire);
      if(field == tlv::ContentType){
@@ -512,33 +396,6 @@ Block Mutator::createField(Block wire, uint32_t field ){
      }
      return mInfo.wireEncode(); 
   }
- // else{
-     /*Selectors selector;
-     selector.wireDecode(wire);
-     switch(field) {
-      case tlv::MinSuffixComponents :
-        selector.setMinSuffixComponents(1);
-        selector.getMinSuffixComponents();
-        break;
-      case tlv::MaxSuffixComponents :
-        selector.setMaxSuffixComponents(0);
-        selector.getMaxSuffixComponents();
-        break;
-      case tlv::KeyLocator :
-        break;
-      case tlv::Exclude :
-        break;
-      case tlv::ChildSelector :
-        selector.setChildSelector(1);
-        selector.getChildSelector();
-        break;
-      case tlv::MustBeFresh :
-        selector.setMustBeFresh(1);
-        selector.getMustBeFresh();
-        break;
-     }
-     return selector.wireEncode();*/
-//  }
 }
 
 size_t Mutator::mutateForwardingHint(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
@@ -561,8 +418,8 @@ size_t Mutator::mutateForwardingHint(Block wire, unsigned int Seed, uint8_t* Dat
      return 0;
   }
   uint32_t field = randomlyChooseSubField(wire, Seed);
-size_t len;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+ size_t len;
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   wire.parse();
   Block subwire = wire.elements()[field];
@@ -620,163 +477,10 @@ size_t len;
   return len;
 }
 
-size_t Mutator::deleteFHDel(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  wire.parse();
-  size_t estimatedSize = name.wireEncode(estimator);
-  uint32_t deletions = rand()%(wire.elements_size());
-  uint32_t position = rand()%(wire.elements_size());
-  EncodingBuffer encoder(estimatedSize, 0);
-  size_t i;
-  
-  for(i=0;i<wire.elements_size();i++){
-     if(i>=position && i<(position+deletions))
-        continue;
-     totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::ForwardingHint);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-  return len;
-}
-
-size_t Mutator::addFHDel(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  if((MaxSize-10) <= (Size))return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  wire.parse();
-  size_t estimatedSize = name.wireEncode(estimator);
-  uint32_t additions = (rand()%((MaxSize-Size)/10));
-
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t bytes1[3] = {8,1, 255};
-  uint8_t bytes2[1] = {255};
-
-  size_t i;
-
-  for(i=0;i<wire.elements_size();i++){
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-  for(i=0;i<additions;i++){
-     size_t delLen = 0;
- 
-     delLen += encoder.prependByteArrayBlock(tlv::Name,  bytes1, 3);
-     delLen += encoder.prependByteArrayBlock(tlv::LinkPreference,  bytes2, 1);
-      
-     delLen += encoder.prependVarNumber(delLen);
-     delLen += encoder.prependVarNumber(tlv::LinkDelegation);
-     totalLength += delLen;
-  }
- 
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::ForwardingHint);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-  return len;
-}
-
-size_t Mutator::suffleFHDel(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() == 1)return wire.value_size();
-  size_t i, totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  size_t estimatedSize = name.wireEncode(estimator);
-  uint32_t suffles = (rand()%(wire.elements_size()/2));
-  int* pos = ( int*) malloc(sizeof(int)*wire.elements_size());
-  uint32_t suffleIndex = 0;
-
-  while(suffleIndex<wire.elements_size()){
-     pos[suffleIndex] = suffleIndex;
-     suffleIndex++;
-  }
-
-  suffleIndex = 0;
-  while(suffleIndex<suffles){
-    uint32_t temp;
-    int first = (rand()%(wire.elements_size()));
-    int second = (rand()%(wire.elements_size()));
-    temp = pos[first];
-    pos[first]=pos[second];
-    pos[second] = temp;
-     suffleIndex++;
-  }
-
-  EncodingBuffer encoder(estimatedSize, 0);
-
-  for(i=0;i<wire.elements_size();i++){
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[pos[i]].type(), wire.elements()[pos[i]].value(), wire.elements()[pos[i]].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::LinkDelegation);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-
-  free(pos);
-  return len;
-}
-
-size_t Mutator::changeFHDelTLV(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  if((MaxSize-5) <= (Size))return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  wire.parse();
-  size_t estimatedSize = name.wireEncode(estimator);
-
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-
-  uint64_t newTLV = (rand()%(std::numeric_limits<uint64_t>::max()));
-  size_t component = (rand()%(wire.elements_size()));
-
-  for(size_t i=0;i<wire.elements_size();i++){
-        if(i == component){
-           size_t delLen = 0;
-           size_t dels = wire.elements()[i].elements_size();
-           delLen += encoder.prependByteArrayBlock(newTLV,  bytes, 1);
-           for(size_t k = 1; k<=dels;k++){
-              delLen += encoder.prependByteArrayBlock(wire.elements()[i].elements()[dels-k].type(), wire.elements()[i].elements()[dels-k].value(), wire.elements()[i].elements()[dels-k].value_size());
-           }
-           delLen += encoder.prependVarNumber(delLen);
-           delLen += encoder.prependVarNumber(tlv::LinkDelegation);
-           totalLength += delLen;
-        }
-        else
-           totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::LinkDelegation);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(size_t i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-
-  free(bytes);
-  return len;
-}
 
 size_t Mutator::mutateName(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
   uint32_t mutationType = (rand()%5);
-if(mutationType < TLVchange){
+  if(mutationType < TLVchange){
      switch(mutationType){
         case deletion :
          return deleteNameCom(wire, Seed, Dat, Size, MaxSize);
@@ -796,7 +500,7 @@ if(mutationType < TLVchange){
   if (wire.elements_size() == 0 ) return wire.value_size();
   uint32_t field = randomlyChooseSubField(wire, Seed);
   size_t len;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   wire.parse();
    
@@ -835,37 +539,6 @@ if(mutationType < TLVchange){
 }
 
 
-size_t Mutator::deleteNameCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() <= 1) return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  size_t estimatedSize = name.wireEncode(estimator);
-  uint32_t deletions = rand()%(wire.elements_size()+1);
-  uint32_t position = rand()%(wire.elements_size());
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-
-  size_t i;
-  
-  for(i=0;i<wire.elements_size();i++){
-        if(i>=position && i<(position+deletions) && wire.elements()[i].type()!=2) continue;
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::Name);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-
-  free(bytes);
-  return len;
-}
 size_t Mutator::addPrefixCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
    if((MaxSize-8) <= (Size))return wire.value_size();
 
@@ -882,9 +555,9 @@ size_t Mutator::addPrefixCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t
    size_t len = 1;
    uint32_t mutations = (rand()%255);
    bytes[0] = mutations; //TODO remove after fuzzer assetion fix
-//   for(uint32_t i = 0; i < mutations; i++){
-//      len =  LLVMFuzzerMutate(bytes, len, MaxSize-8);
-//   }
+   //for(uint32_t i = 0; i < mutations; i++){
+   //   len =  LLVMFuzzerMutate(bytes, len, MaxSize-8);
+  // }
    size_t i;
    for(i=0;i<wire.elements_size();i++){
       totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
@@ -901,122 +574,6 @@ size_t Mutator::addPrefixCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t
     }
     free(bytes);
     return totalLength;
-}
-
-size_t Mutator::addNameCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  if((MaxSize-8) <= (Size))return wire.value_size();
-
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  wire.parse();
-  size_t estimatedSize = name.wireEncode(estimator);
-  uint32_t additions = (rand()%((MaxSize-Size)/3));
-  additions = 1;
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-     
-  size_t i;
-  
-  for(i=0;i<wire.elements_size();i++){
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-  for(i=0;i<additions;i++){
-        totalLength += encoder.appendByteArrayBlock(tlv::GenericNameComponent, bytes, 1);
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::Name);
-  size_t len = encoder.block().value_size();
-  encoder.block().parse();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-  free(bytes);
-  return len;
-}
-
-size_t Mutator::suffleNameCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  if(wire.elements_size() <= 1)return wire.value_size();
-  wire.parse();
-  size_t i, totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  size_t estimatedSize = name.wireEncode(estimator);
-  uint32_t suffles = (rand()%(wire.elements_size()/2));
-  int* pos = ( int*) malloc(sizeof(int)*wire.elements_size());
-  uint32_t suffleIndex = 0;
-
-  while(suffleIndex<wire.elements_size()){
-     pos[suffleIndex] = suffleIndex;
-     suffleIndex++;   
-  }
-
-  suffleIndex = 0;
-  while(suffleIndex<suffles){
-    uint32_t temp;
-    int first = (rand()%(wire.elements_size()));
-    int second = (rand()%(wire.elements_size()));
-    temp = pos[first];
-    pos[first]=pos[second];
-    pos[second] = temp;
-     suffleIndex++;
-  }
-
-  EncodingBuffer encoder(estimatedSize, 0);
-
-  for(i=0;i<wire.elements_size();i++){
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[pos[i]].type(), wire.elements()[pos[i]].value(), wire.elements()[pos[i]].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::Name);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-
-  free(pos);
-  return len;
-}
-
-size_t Mutator::changeNameComTLV(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  wire.parse();
-  size_t estimatedSize = name.wireEncode(estimator);
-
-  EncodingBuffer encoder(estimatedSize, 0);
-
-  uint32_t newTLV = (rand()%(std::numeric_limits<uint32_t>::max()));
-  size_t component;
-  if(wire.elements_size() <= 1) return wire.value_size();//component = 0;
-  else {
-     do{
-        component = (rand()%(wire.elements_size()));
-     }
-     while(wire.elements()[component].type()==2); 
-  }
-  for(size_t i=0;i<wire.elements_size();i++){
-        if(i == component){
-           totalLength += encoder.appendByteArrayBlock(newTLV, wire.elements()[i].value(), wire.elements()[i].value_size());
-        }
-        else
-           totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::Name);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(size_t i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-  return len;
 }
 
 size_t Mutator::mutateSignatureInfo(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
@@ -1040,7 +597,7 @@ size_t Mutator::mutateSignatureInfo(Block wire, unsigned int Seed, uint8_t* Dat,
   }
   uint32_t field = randomlyChooseSubField(wire, Seed);
   size_t len=0;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   wire.parse();
   Block::element_const_iterator element = wire.find(field);
@@ -1134,7 +691,7 @@ size_t Mutator::mutateSignatureInfo(Block wire, unsigned int Seed, uint8_t* Dat,
   totalLength += encoder.prependVarNumber(totalLength);
   totalLength += encoder.prependVarNumber(tlv::SignatureInfo);
   const uint8_t* bytes2 = encoder.block().value();
-  if(totalLength>4096) return wire.value_size();
+  if(totalLength>MaxSize) return wire.value_size();
   for(size_t j = 0; j < encoder.block().value_size(); j++){
      Dat[j] = bytes2[j];
   }
@@ -1142,172 +699,31 @@ size_t Mutator::mutateSignatureInfo(Block wire, unsigned int Seed, uint8_t* Dat,
  return len;
 }
 
-size_t Mutator::deleteSigInfo(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() <= 1) return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metainfo;
-  size_t estimatedSize = metainfo.wireEncode(estimator);
-  uint32_t deletions = rand()%(wire.elements_size()+1);
-  uint32_t position = 1+rand()%(wire.elements_size()-1);
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-  size_t i;
-
-  for(i=0;i<wire.elements_size();i++){
-        if(i>=position && i<(position+deletions)) continue;
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::SignatureInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-
-  free(bytes);
-  return len;
-}
-
-size_t Mutator::addSigInfo(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  if((MaxSize-8) <= (Size))return wire.value_size();
-  size_t len =1, totalLength = 0;
-  EncodingEstimator estimator;
-  Name name;
-  wire.parse();
-  size_t estimatedSize = name.wireEncode(estimator);
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-  uint32_t sigInfoFields [7]= {tlv::SignatureType, tlv::KeyLocator, tlv::AdditionalDescription, tlv::DescriptionEntry, tlv::DescriptionKey, tlv::DescriptionValue, tlv::ValidityPeriod} ;
-  uint32_t field = rand()%6;
-  if(sigInfoFields[field] ==  tlv::KeyLocator)
-       len = 0;
-  size_t i;
-
-  for(i=0;i<wire.elements_size();i++){
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-        totalLength += encoder.appendByteArrayBlock(sigInfoFields[field], bytes, len);
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::SignatureInfo);
-  len = encoder.block().value_size();
-  encoder.block().parse();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-
-  free(bytes);
-  return len;
-}
-
-size_t Mutator::suffleSigInfo(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() <= 2)return wire.value_size();
-  //srand(Seed);
-  wire.parse();
-  size_t i, totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-  uint32_t suffles = (rand()%(wire.elements_size()/2));
-  int* pos = ( int*) malloc(sizeof(int)*wire.elements_size());
-  uint32_t suffleIndex = 0;
-
-  while(suffleIndex<wire.elements_size()){
-     pos[suffleIndex] = suffleIndex;
-     suffleIndex++;
-  }
-
-  suffleIndex = 0;
-  while(suffleIndex<suffles){
-    uint32_t temp;
-    int first = 2+rand()%(wire.elements_size()-2);
-    int second = 2+rand()%(wire.elements_size()-2);
-    temp = pos[first];
-    pos[first]=pos[second];
-    pos[second] = temp;
-     suffleIndex++;
-  }
-
-  EncodingBuffer encoder(estimatedSize, 0);
-
-  for(i=0;i<wire.elements_size();i++){
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[pos[i]].type(), wire.elements()[pos[i]].value(), wire.elements()[pos[i]].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::SignatureInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-  free(pos);
-  return len;
-}
-
-size_t Mutator::changeSigInfoTLV(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  //srand(Seed);
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  wire.parse();
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint32_t newTLV = (rand()%(std::numeric_limits<uint32_t>::max()));
-  size_t component;
-  if(wire.elements_size() <= 1) return wire.value_size();
-  else component = 1+rand()%(wire.elements_size()-1);
-
-  for(size_t i=0;i<wire.elements_size();i++){
-        if(i == component)
-           totalLength += encoder.appendByteArrayBlock(newTLV, wire.elements()[i].value(), wire.elements()[i].value_size());
-        else
-           totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::SignatureInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(size_t i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-  return len;
-}
-
 size_t Mutator::mutateKeyLocator(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
   uint32_t mutationType = (rand()%5);
   mutationType = Mutator::fieldmutation;
-  if(mutationType != Mutator::fieldmutation){
+  //TODO These all led to parsing issues, verify and check and if possible correct the issue. 
+  /*if(mutationType != Mutator::fieldmutation){
      switch(mutationType){
         case Mutator::deletion :
-  //         return deleteNameCom(wire, Seed, Dat, Size, MaxSize);
+           return deleteNameCom(wire, Seed, Dat, Size, MaxSize);
            break;
 	case Mutator::addition :
-    //       return addNameCom(wire, Seed, Dat, Size, MaxSize);
+           return addNameCom(wire, Seed, Dat, Size, MaxSize);
            break;
 	case Mutator::suffle :
-      //     return suffleNameCom(wire, Seed, Dat, Size, MaxSize);
+           return suffleNameCom(wire, Seed, Dat, Size, MaxSize);
            break;
 	case Mutator::TLVchange :
-        //   return changeNameComTLV(wire, Seed, Dat, Size, MaxSize);
+           return changeNameComTLV(wire, Seed, Dat, Size, MaxSize);
            break;
      }
      return 0;
-  }
-  //wire.parse();
+  }*/
+  wire.parse();
   if (wire.elements_size() == 0 ) return wire.value_size();
   size_t len;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   int change = 0; 
   const uint8_t* byteTransfer = wire.elements()[0].value();
@@ -1372,7 +788,7 @@ size_t Mutator::mutateMetaInfo(Block wire, unsigned int Seed, uint8_t* Dat, size
   field = randomlyChooseSubField(wire, Seed);
   }while(field == tlv::FreshnessPeriod &&  ensureSatisfaction > 10);
   size_t len=0;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   wire.parse();
   Block::element_const_iterator element = wire.find(field);
@@ -1424,7 +840,6 @@ size_t Mutator::mutateMetaInfo(Block wire, unsigned int Seed, uint8_t* Dat, size
      len = mutateNonsubTLVfield(wire, field, Seed, bytes1, Size, MaxSize);
   }
   size_t totalLength = 0;
-  // ForwardingHint
   EncodingEstimator estimator;
   SignatureInfo sigInfo(tlv::DigestSha256);
   size_t estimatedSize = sigInfo.wireEncode(estimator);
@@ -1447,178 +862,12 @@ size_t Mutator::mutateMetaInfo(Block wire, unsigned int Seed, uint8_t* Dat, size
  free(bytes1);
  return len;
 }
- 
-size_t Mutator::deleteMeta(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() == 0) return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metainfo;
-  size_t estimatedSize = metainfo.wireEncode(estimator);
-  uint32_t deletions = rand()%(wire.elements_size()+1);
-  uint32_t position = rand()%(wire.elements_size());
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-
-  size_t i;
-
-  bool firstFBID = true;
-  for(i=0;i<wire.elements_size();i++){
-        if(i>=position && i<(position+deletions)) continue;
-        if(wire.elements()[i].type() == tlv::FinalBlockId && wire.elements()[i].elements_size() == 0 && firstFBID){
-           uint8_t bytes[3] = {8, 1, 255};
-           totalLength += encoder.appendByteArrayBlock(tlv::FinalBlockId, bytes, 3);
-           firstFBID=false;
-        }
-        else
-           totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-
-  free(bytes);
-  return len;
-}
-
-size_t Mutator::addMeta(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  if((MaxSize-8) <= (Size))return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  wire.parse();
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-  uint32_t additions = (rand()%((MaxSize-Size)/3));
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-  uint32_t metaInfoFields [3]={tlv::ContentType, tlv::FreshnessPeriod, tlv::FinalBlockId};
-  size_t i;
-  bool firstFBID = true;
-
-  for(i=0;i<wire.elements_size();i++){
-        if(wire.elements()[i].type() == tlv::FinalBlockId && firstFBID) firstFBID=false;
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());  
-}
-  for(i=0;i<additions;i++){
-     uint32_t field = rand()%3;
-     if(metaInfoFields[field] == tlv::FinalBlockId && firstFBID){
-        uint8_t bytes[3] = {8, 1, 255};
-        totalLength += encoder.appendByteArrayBlock(tlv::FinalBlockId, bytes, 3);
-        firstFBID=false;
-     }
-     else
-        totalLength += encoder.appendByteArrayBlock(metaInfoFields[field], bytes, 1);
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  encoder.block().parse();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-
-  free(bytes);
-  return len;
-}
-
-size_t Mutator::suffleMeta(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() <= 1)return wire.value_size();
-  wire.parse();
-  size_t i, totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-  uint32_t suffles = (rand()%(wire.elements_size()/2));
-  int* pos = ( int*) malloc(sizeof(int)*wire.elements_size());
-  uint32_t suffleIndex = 0;
-
-  while(suffleIndex<wire.elements_size()){
-     pos[suffleIndex] = suffleIndex;
-     suffleIndex++;
-  }
-  suffleIndex = 0;
-  while(suffleIndex<suffles){
-    uint32_t temp;
-    int first = (rand()%(wire.elements_size()));
-    int second = (rand()%(wire.elements_size()));
-    temp = pos[first];
-    pos[first]=pos[second];
-    pos[second] = temp;
-     suffleIndex++;
-  }
-
-  EncodingBuffer encoder(estimatedSize, 0);
-  bool firstFBID = true;
-  for(i=0;i<wire.elements_size();i++){
-        if(wire.elements()[pos[i]].type() == tlv::FinalBlockId && wire.elements()[pos[i]].elements_size() == 0 && firstFBID){
-           uint8_t bytes[3] = {8, 1, 255};
-           totalLength += encoder.appendByteArrayBlock(tlv::FinalBlockId, bytes, 3);
-           firstFBID=false;
-        }
-        else 
-        {
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[pos[i]].type(), wire.elements()[pos[i]].value(), wire.elements()[pos[i]].value_size());
-        }
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-  free(pos);
-  return len;
-}
-
-size_t Mutator::changeMetaTLV(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  wire.parse();
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-
-  EncodingBuffer encoder(estimatedSize, 0);
-
-  uint32_t newTLV = (rand()%(std::numeric_limits<uint32_t>::max()));
-  size_t component;
-  if(wire.elements_size() <= 1) component = 0;
-  else component = (rand()%(wire.elements_size()));
-
-  for(size_t i=0;i<wire.elements_size();i++){
-        if(i == component)
-           totalLength += encoder.appendByteArrayBlock(newTLV, wire.elements()[i].value(), wire.elements()[i].value_size());
-        else
-           totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(size_t i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-
-  return len;
-}
 
 size_t Mutator::mutateFinalBlockId(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
   if (wire.elements_size() == 0 ) return wire.value_size();
   uint32_t field = randomlyChooseSubField(wire, Seed);
   size_t len;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   wire.parse();
 
@@ -1662,7 +911,7 @@ size_t Mutator::mutateAppParam(Block wire, unsigned int Seed, uint8_t* Dat, size
 
   uint32_t field = randomlyChooseSubField(wire, Seed);
   size_t len=0;
-  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*4096);
+  uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
   size_t i;
   Block subwire = wire.elements()[field];
   const uint8_t* byteTransfer = subwire.value();
@@ -1692,169 +941,6 @@ size_t Mutator::mutateAppParam(Block wire, unsigned int Seed, uint8_t* Dat, size
   }
  free(bytes1);
  return len;
-}
-
-size_t Mutator::deleteAppParam(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() == 0) return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metainfo;
-  size_t estimatedSize = metainfo.wireEncode(estimator);
-  uint32_t deletions = rand()%(wire.elements_size()+1);
-  uint32_t position = rand()%(wire.elements_size());
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-
-  size_t i;
-
-  bool firstFBID = true;
-  for(i=0;i<wire.elements_size();i++){
-        if(i>=position && i<(position+deletions)) continue;
-        if(wire.elements()[i].type() == tlv::FinalBlockId && wire.elements()[i].elements_size() == 0 && firstFBID){
-           uint8_t bytes[3] = {8, 1, 255};
-           totalLength += encoder.appendByteArrayBlock(tlv::FinalBlockId, bytes, 3);
-           firstFBID=false;
-        }
-        else
-           totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-
-  free(bytes);
-  return len;
-}
-size_t Mutator::addAppParam(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  if((MaxSize-8) <= (Size))return wire.value_size();
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  wire.parse();
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-  uint32_t additions = (rand()%((MaxSize-Size)/3));
-  EncodingBuffer encoder(estimatedSize, 0);
-  uint8_t* bytes = ( uint8_t*) malloc(sizeof(uint8_t));
-  bytes[0] = 255;
-  uint32_t metaInfoFields [3]={tlv::ContentType, tlv::FreshnessPeriod, tlv::FinalBlockId};
-  size_t i;
-  bool firstFBID = true;
-
-  for(i=0;i<wire.elements_size();i++){
-        if(wire.elements()[i].type() == tlv::FinalBlockId && firstFBID) firstFBID=false;
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-}
-  for(i=0;i<additions;i++){
-     uint32_t field = rand()%3;
-     if(metaInfoFields[field] == tlv::FinalBlockId && firstFBID){
-        uint8_t bytes[3] = {8, 1, 255};
-        totalLength += encoder.appendByteArrayBlock(tlv::FinalBlockId, bytes, 3);
-        firstFBID=false;
-     }
-     else
-        totalLength += encoder.appendByteArrayBlock(metaInfoFields[field], bytes, 1);
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  encoder.block().parse();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-     }
-
-  free(bytes);
-  return len;
-}
-size_t Mutator::suffleAppParam(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  wire.parse();
-  if(wire.elements_size() <= 1)return wire.value_size();
-  wire.parse();
-  size_t i, totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-  uint32_t suffles = (rand()%(wire.elements_size()/2));
-  int* pos = ( int*) malloc(sizeof(int)*wire.elements_size());
-  uint32_t suffleIndex = 0;
-
-  while(suffleIndex<wire.elements_size()){
-     pos[suffleIndex] = suffleIndex;
-     suffleIndex++;
-  }
-  suffleIndex = 0;
-  while(suffleIndex<suffles){
-    uint32_t temp;
-    int first = (rand()%(wire.elements_size()));
-    int second = (rand()%(wire.elements_size()));
-    temp = pos[first];
-    pos[first]=pos[second];
-    pos[second] = temp;
-     suffleIndex++;
-  }
-
-  EncodingBuffer encoder(estimatedSize, 0);
-  bool firstFBID = true;
-  for(i=0;i<wire.elements_size();i++){
-        if(wire.elements()[pos[i]].type() == tlv::FinalBlockId && wire.elements()[pos[i]].elements_size() == 0 && firstFBID){
-           uint8_t bytes[3] = {8, 1, 255};
-           totalLength += encoder.appendByteArrayBlock(tlv::FinalBlockId, bytes, 3);
-           firstFBID=false;
-        }
-        else
-        {
-        totalLength += encoder.appendByteArrayBlock(wire.elements()[pos[i]].type(), wire.elements()[pos[i]].value(), wire.elements()[pos[i]].value_size());
-        }
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-  free(pos);
-  return len;
-}
-size_t Mutator::changeAppParamTLV(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  size_t totalLength = 0;
-  EncodingEstimator estimator;
-  MetaInfo metaInfo;
-  wire.parse();
-  size_t estimatedSize = metaInfo.wireEncode(estimator);
-
-  EncodingBuffer encoder(estimatedSize, 0);
-
-  uint32_t newTLV = (rand()%(std::numeric_limits<uint32_t>::max()));
-  size_t component;
-  if(wire.elements_size() <= 1) component = 0;
-  else component = (rand()%(wire.elements_size()));
-
-  for(size_t i=0;i<wire.elements_size();i++){
-        if(i == component)
-           totalLength += encoder.appendByteArrayBlock(newTLV, wire.elements()[i].value(), wire.elements()[i].value_size());
-        else
-           totalLength += encoder.appendByteArrayBlock(wire.elements()[i].type(), wire.elements()[i].value(), wire.elements()[i].value_size());
-  }
-
-  totalLength += encoder.prependVarNumber(totalLength);
-  totalLength += encoder.prependVarNumber(tlv::MetaInfo);
-  size_t len = encoder.block().value_size();
-  const uint8_t* byteTransfer = encoder.block().value();
-  for(size_t i = 0; i < len; i++){
-     Dat[i]= byteTransfer[i];
-  }
-
-  return len;
 }
 
 } // namespace nd

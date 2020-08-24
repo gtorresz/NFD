@@ -597,7 +597,7 @@ extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
   int satisfyInterest = (rand()%1000)-(1000-interestCount);
   if(satisfyInterest > 100 && interestCount > 0){
      int pos = (rand()%interestCount);
-     dataLen = DataCustomMutator(data.wireEncode(), interests[pos], dbytes, sizes[pos], MaxSize/2, seed);
+     dataLen = DataCustomMutator(data.wireEncode(), interests[pos], dbytes, sizes[pos], PACKETSIZE, seed);
      for(size_t i= 0;i<dataLen;i++){
         dataPks[dpos][i] = dbytes[i];
      }
@@ -608,7 +608,7 @@ extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
      if (dataCount != 300)
         mutator.incrementDataCount();
   }
-  size_t interestLength = mutator.LLVMFuzzerCustomMutator1(temp, flatint, Size, MaxSize/2, Seed);
+  size_t interestLength = mutator.LLVMFuzzerCustomMutator1(temp, flatint, Size, PACKETSIZE, Seed);
 
   for(size_t i= 0;i<interestLength;i++){
      interests[cpos][i] = flatint[i];
