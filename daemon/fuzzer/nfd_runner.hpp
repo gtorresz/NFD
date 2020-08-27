@@ -138,12 +138,6 @@ public:
     m_nfd.initialize();
   }
   
-  void
-  addFibentry(ndn::Name Prefix)
-  {
-  m_nfd.addFibentry(Prefix);
-  }
-
   int
   run(std::mutex& NFDmtx, std::condition_variable& cvar, bool& NFD_Running)
   {

@@ -157,7 +157,8 @@ SetUp(){
   struct tm * timeinfo;
   time ( &rawtime );
   timeinfo = localtime (&rawtime);
-  sprintf(fr, "FuzzerTrace/packetTrace.csv");
+  sprintf(fr, "FuzzerTrace/packetTrace%02d-%02d-%04d-%02d:%02d:%02d.csv", 
+		  (timeinfo->tm_mon)+1,timeinfo->tm_mday, timeinfo->tm_year+1900, timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
   FILE* fp = fopen (fr, "w");
   
   using namespace nfd;

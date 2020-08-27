@@ -103,7 +103,10 @@ main(int argc, char** argv){
      interest.setInterestLifetime(options.getTimeout());
      wire = interest.wireEncode();
      sock.send(boost::asio::buffer(wire.wire(), wire.size()));
+
   }
+ usleep(10000);
+		 
   string input;
   while(getline(File, input)) {
     std::cout<<"Testing...\n";
@@ -143,9 +146,9 @@ main(int argc, char** argv){
 	else
            sockudp.send(boost::asio::buffer(wire1.wire(), wire1.size()));
      }
-     struct timeval t1;
-     t1.tv_usec = 1000;
-     select(0, NULL, NULL, NULL, &t1);
+//     struct timeval t1;
+//     t1.tv_usec = 1000;
+//     select(0, NULL, NULL, NULL, &t1);
 //     usleep(1000);
   }
 
