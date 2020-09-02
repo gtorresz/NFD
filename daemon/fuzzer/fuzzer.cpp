@@ -165,8 +165,8 @@ SetUp(){
 
   //Start NFD in new thread, and pass in mutex and condition variable for synching
   std::string configFile = DEFAULT_CONFIG_FILE;
-  NfdRunner runner(configFile);
-  std::thread ribThread([&runner]{
+  std::thread ribThread([configFile]{
+     NfdRunner runner(configFile);
      runner.initialize();
      return runner.run(NFDmtx, cvar, NFD_Running);
   });

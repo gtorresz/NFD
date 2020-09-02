@@ -52,8 +52,8 @@ main(int argc, char** argv){
   timeinfo = localtime (&rawtime);
   using namespace nfd;
   std::string configFile = DEFAULT_CONFIG_FILE;
-  NfdRunner runner(configFile);
-  std::thread ribThread([&runner]{
+  std::thread NFDThread([configFile]{
+     NfdRunner runner(configFile);
      runner.initialize();
      return runner.run(NFDmtx, cvar, NFD_Running);
   });
@@ -155,7 +155,7 @@ main(int argc, char** argv){
   free(flatbuffer);
   std::cout<<"done\n";
   getMainIoService().stop();
-  //ribThread.join();
+  NFDThread.join();
   return 0;
 }
 

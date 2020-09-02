@@ -577,8 +577,9 @@ size_t Mutator::addPrefixCom(Block wire, unsigned int Seed, uint8_t* Dat, size_t
 }
 
 size_t Mutator::mutateSignatureInfo(Block wire, unsigned int Seed, uint8_t* Dat, size_t Size, size_t MaxSize){
-  uint32_t mutationType = 1+(rand()%4);
-  if(mutationType != Mutator::fieldmutation){
+  //uint32_t mutationType = 1+(rand()%4);
+  //TODO These all led to parsing issues, verify and check and if possible correct the issue.
+  /*if(mutationType != Mutator::fieldmutation){
      switch(mutationType){
         case Mutator::deletion :
            return deleteSigInfo(wire, Seed, Dat, Size, MaxSize);
@@ -594,7 +595,7 @@ size_t Mutator::mutateSignatureInfo(Block wire, unsigned int Seed, uint8_t* Dat,
            break;
      }
      return 0;
-  }
+  }*/
   uint32_t field = randomlyChooseSubField(wire, Seed);
   size_t len=0;
   uint8_t* bytes1 = ( uint8_t*) malloc(sizeof(uint8_t)*MaxSize);
